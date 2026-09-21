@@ -9,7 +9,9 @@ name: release-charts
 on:
   push:
     branches: [main]
-    paths: ['charts/**']
+    # hack/ and this file are in the list so that a change to the landing-page
+    # generator actually regenerates the page.
+    paths: ['charts/**', 'hack/**', '.github/workflows/release.yml']
   workflow_dispatch:
 
 permissions:
@@ -52,3 +54,27 @@ jobs:
           skip_existing: true
         env:
           CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # chart-releaser writes index.yaml and nothing else, so the site root would
+      # be a bare 404. Rebuild the landing page from the index it just published
+      # -- from the index rather than from charts/, so the page cannot advertise
+      # a version that was not actually released.
+      #
+      # Pushing to gh-pages does not retrigger this workflow: it only runs on
+      # pushes to main.
+      - name: Refresh the landing page
+        run: |
+          set -eu
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          git fetch --depth=1 origin gh-pages
+          rm -rf /tmp/pages
+          git worktree add --detach /tmp/pages FETCH_HEAD
+          python3 hack/render_index_html.py /tmp/pages/index.yaml /tmp/pages/index.html
+          cd /tmp/pages
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "landing page already up to date"
+          else
+            git commit -m "docs: refresh the landing page from index.yaml"
+            git push origin HEAD:gh-pages
+          fi
