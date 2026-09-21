@@ -1,9 +1,4 @@
 apiVersion: v2
-# The chart is named `cart`, not `cache_aware_router`: the underscored form makes
-# the default fullname (`<release>-cache_aware_router`) an invalid RFC 1123
-# resource name, so it would only ever install with a nameOverride. `cart` renders
-# valid by default, and is also the values key a parent chart gates on
-# (cart.enabled).
 name: cart
 description: "Cache-aware router: routes each request to the replica that already holds the longest matching prompt prefix, while keeping load balanced"
 home: https://github.com/project-modelpilot/helm-charts
