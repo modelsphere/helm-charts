@@ -1,45 +1,53 @@
 image:
-  # 公共 registry(Docker Hub 的 4pdosc org),仓外用户开箱可拉。
-  # 内网部署显式覆盖成 4pdosc/cache_aware_router。
+  # Public images on Docker Hub. Override this (and the two sidecars below) to
+  # pull from your own registry -- worth doing if your cluster has no egress.
   repository: 4pdosc/cache_aware_router
-  tag: ""              # 缺省用 Chart.appVersion(见 Chart.yaml)
+  tag: ""              # empty falls back to Chart.appVersion
   pullPolicy: IfNotPresent
 
-replicas: 2                # master-standby:2 副本,只有 leader 收流量(单 active 保缓存 + 计数正确)
+replicas: 2                # master/standby: two replicas, only the leader takes traffic (see ha below)
 
-# waitForWorkers:加个 initContainer 等 autoconfig 把真 workers 写进 config.yaml 再启 cart。
-# CART 拒绝空 workers → 会退出崩溃循环(CrashLoopBackOff),直到 autoconfig 写 workers 才恢复。
-# 有了它:pod 停在 Init(等依赖)而非 CrashLoop,workers 就绪后一次性干净启动。设 false 关(如手填了 workers)。
+# Adds an initContainer that waits for real workers to appear in config.yaml
+# before CART starts. CART refuses to start with an empty worker list and exits,
+# which under a Deployment means CrashLoopBackOff until the list is filled in.
+# With this on, the pod sits in Init -- visibly waiting on a dependency rather
+# than looking broken -- and then starts once, cleanly. It gives up after ~10
+# minutes and starts anyway. Set false if you write workers into baseConfig
+# yourself, in which case the check passes immediately regardless.
 waitForWorkers: true
 
-# master-standby(主备):ha-gate sidecar 选举,只有 leader 通过 readiness → 只有它进 Service。
-# CART 有本地 radix 缓存,active-active 会分裂缓存 → 命中率下降;单 active 保持一份热缓存。
+# Leader election through the ha-gate sidecar: only the leader passes readiness,
+# so only the leader is in the Service's endpoints. CART's radix cache is local
+# to a process, so an active/active pair would split it in half and halve the
+# hit rate; one active replica keeps a single warm cache.
 ha:
   enabled: true
-  # ⚠️ 这两个 sidecar 镜像来自 autoconfig 仓,不是本仓的产物,版本要跟 autoconfig 的发版走。
-  # 默认值指向公共 registry(Docker Hub 的 4pdosc org),让仓外用户能开箱即用;
-  # 内网部署【必须显式覆盖】成 4pdosc/autoconfig-hagate:<ver>,
-  # 生产集群出不了外网,吃默认值会 ImagePullBackOff —— 而 sidecar 是同 pod 的普通容器,
-  # 拉不到整个 pod 都起不来。详见 reload.image 那里的同款提醒。
+  # This sidecar is built from the autoconfig project, not from CART, so its
+  # version tracks autoconfig's releases rather than this chart's appVersion.
+  # It is a regular container in the pod, not an init container: if the image
+  # cannot be pulled, the whole pod stays down. Override it alongside the others
+  # when pulling from your own registry.
   image: 4pdosc/autoconfig-hagate:0.3.31
   port: 8081
   appTcp: "127.0.0.1:8071"
 
 probes:
-  enabled: true       # startup+liveness(+readiness)总开关(Helm 约定,非 k8s 语法)
+  enabled: true       # one switch for startup + liveness + readiness (a Helm convention, not k8s syntax)
 
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
-# CART 配置 ConfigMap(config.yaml):chart 建**底稿**(server/cache/health),autoconfig 只重填 workers 段。
-# 这就是 CART 的 base——per-model 的 port/cache 等直接改这里(每个模型一个 cart release)。不再有单独的 baseConfigRef。
-# ⚠️ cart 是【一个模型一个】,此 CM 也按模型独立。名字默认 = <fullname>-config(按 release 唯一,多 cart 同 ns 不撞);
-#    ModelRoute.cart.outputConfigMap 指到这个名,或指到某个覆盖层 CM(见 extraConfigs)。
+# Name of the ConfigMap holding CART's configuration. Empty means
+# <fullname>-config, which is unique per release, so several CARTs can share a
+# namespace without colliding. One CART serves exactly one model, so this
+# ConfigMap is per-model too.
 configMapName: ""
 
-# 底稿 config.yaml(server/cache/health)。workers 由 autoconfig 写(落点是本 CM 或某个覆盖层 CM);
-# standalone(无 autoconfig)时可在此直接写死 workers。
+# The base config.yaml. Tune per-model settings (port, cache thresholds, ...)
+# here. In a standalone install, write the worker list in as well; when a
+# controller manages the workers it writes them into an overlay key instead
+# (see configOverlays).
 baseConfig: |
   server:
     host: "0.0.0.0"
@@ -56,31 +64,37 @@ baseConfig: |
     endpoint: "/health"
     interval_secs: 10
 
-# 覆盖层:和底稿同一个 ConfigMap,额外 N 个 key,按本列表顺序追加到 `-c` 后面(底稿在最前)。
-# 后者覆盖前者:mapping 逐键合并,list/标量整体替换,空文件不生效。
-# 标 autoconfig: true 的那条(最多一条)归 autoconfig:chart 不渲染它的内容,ModelRoute.cart.outputKey
-# 指它,于是模板里没有这个 key,helm upgrade 永远不会盖掉 autoconfig 写进去的 workers。
-# 留空([])= 旧行为:autoconfig 直接重写底稿的 config.yaml。
+# Extra keys in the same ConfigMap, appended after the base in the order listed
+# and passed to CART as further `-c` files. Later files win: mappings merge key
+# by key, lists and scalars are replaced wholesale, and an empty file changes
+# nothing.
+#
+# At most one entry may be marked `autoconfig: true`. The chart does not render
+# that key's content, so `helm upgrade` has nothing to write there and cannot
+# clobber what the controller put in it. Leave the list empty and the controller
+# rewrites the base document directly instead.
 configOverlays: []
-#   - key: workers.yaml     # autoconfig 的落点;chart 不建这个 key,首次 reconcile 由 autoconfig 写出
+#   - key: workers.yaml     # written by the controller on its first reconcile
 #     autoconfig: true
-#   - key: tuning.yaml      # chart 自己管的调参
+#   - key: tuning.yaml      # managed by this chart
 #     content: |
 #       cache:
 #         threshold: 0.3
 
-# launch_service 要求 ulimit -n ≥ 65535
+# CART's entrypoint refuses to start below this -- a router holding thousands of
+# concurrent streams runs out of file descriptors long before it runs out of CPU.
 ulimitNofile: 65535
 
 reload:
   enabled: true
-  # ⚠️ 同 ha.image:来自 autoconfig 仓,默认公共 registry,内网部署必须显式覆盖成 harbor 的。
+  # As with ha.image: built from autoconfig, versioned with it. Watches the
+  # mounted ConfigMap and sends SIGHUP to CART when it changes.
   image: 4pdosc/autoconfig-reload:0.3.31
   process: "cache-aware-router"
 
 service:
   type: ClusterIP
-  port: 8071           # 需与 ModelRoute.cart.port 一致(openresty 按此路由到 CART)
+  port: 8071           # must match the port in baseConfig above
 
 resources:
   requests: { cpu: 200m, memory: 256Mi }
@@ -89,13 +103,16 @@ resources:
 podAnnotations: {}
 nodeSelector: {}
 tolerations: []
-# 与 ha.enabled 的「主备分散到不同节点」叠加,不是替换:这里只写 nodeAffinity 时,
-# 那条 podAntiAffinity 仍在。自己写 podAntiAffinity 才会覆盖它。
+# Anything set here ADDS to the podAntiAffinity that ha.enabled installs (which
+# keeps the two replicas off one node) rather than replacing it. Write your own
+# podAntiAffinity to override that one.
 affinity: {}
 nameOverride: ""
 fullnameOverride: ""
 
-# terminationGracePeriodSeconds:唯一硬切刀,到点 SIGKILL 强砍在途流。cart 转发 SSE 长流(LLM 64K 输出可能上千秒),
-# 须按最长流式响应设,否则吃 k8s 默认 30s → rollout 时 >30s 的在途流会被切(hagate graceful-drain 保住 flow 也没用,
-# grace 到期即 SIGKILL;2026-08-13 实测 40s 流在 30s 处被切 CURLEXIT=18)。与 openresty chart 对齐。
+# The one hard cutoff: at this point the kubelet sends SIGKILL and any request
+# still in flight dies. CART forwards SSE streams that can run for many minutes
+# (a 64K-token completion is not unusual), so this has to be set to the longest
+# response you expect. The Kubernetes default of 30s will cut them: a graceful
+# drain cannot hold a connection open past the grace period.
 terminationGracePeriodSeconds: 3600

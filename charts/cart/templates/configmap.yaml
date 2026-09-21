@@ -1,7 +1,8 @@
 {{- include "cart.configOverlays.check" . }}
-# cart-config:chart 建底稿 config.yaml + 各 overlay key。
-# 标了 autoconfig 的 key 不在这里渲染 —— 模板不出这个 key,helm upgrade 的三方合并就没有它,
-# autoconfig 写进去的 workers 不会被 upgrade 盖掉。
+# Holds the base config.yaml plus every overlay key.
+# A key marked autoconfig is deliberately not rendered here: if the template
+# never emits it, helm upgrade's three-way merge has nothing to write there, and
+# the worker list the controller put in survives the upgrade.
 apiVersion: v1
 kind: ConfigMap
 metadata:

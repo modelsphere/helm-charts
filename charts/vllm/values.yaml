@@ -150,50 +150,64 @@ hangWatcher:
   enabled: true              # default on; false = fall back to the engine's own livenessProbe, drop the sidecar (e.g. image unreachable)
   image:
     repository: "4pdosc/hang-watcher"
-    # >= 0.1.22 是硬要求,下面的 stallSec 和 livenessProbe 都依赖它:它的
-    # vllm:kv_cache_usage_perc 判据覆盖 prefill 盲区,且每轮停滞都探(判死需要连续
-    # 失败,而非一次探测超时)。更老的版本必须放大 stallSec 到能盖住最长的一次 prefill。
+    # 0.1.22 or newer is a hard requirement: both stallSec and the livenessProbe
+    # below assume it. That version adds the vllm:kv_cache_usage_perc signal,
+    # which covers the prefill blind spot, and probes on every stalled poll, so
+    # declaring a hang takes consecutive failures rather than one slow probe.
+    # On anything older, raise stallSec until it covers your longest prefill.
     tag: "0.1.22"
   port: 9090                 # /healthz port (just needs to differ from service.port)
   # Thresholds -> ConfigMap the sidecar hot-reloads (helm upgrade retunes, no pod restart).
   config:
-    # 检出会有 0~pollIntervalSec 的抖动(stallSec 到点后还要等下一次 poll)。
+    # Detection is late by 0..pollIntervalSec: once stallSec is reached, the
+    # sidecar still waits for the next poll.
     pollIntervalSec: 5
-    # token_progress 允许冻结多久,超过就开始怀疑。与 charts/sglang 取同一个值。
+    # How long token_progress may stay frozen before the sidecar gets suspicious.
+    # The sglang chart uses the same value.
     #
-    # vLLM 在 decode 期间逐 step 推进 generation_tokens_total,没有 sglang 那种
-    # 「只在请求结束时累加」的盲区;但 prefill 期间它的三个 counter 全部冻结,
-    # 覆盖那一段靠 sidecar 的 vllm:kv_cache_usage_perc 判据(见 image.tag)。
-    # 用更老的 sidecar 跑超长上下文、且并发低的部署时,这个值要调大到能盖住
-    # 最长的一次 prefill。
+    # vLLM advances generation_tokens_total step by step during decode, so it has
+    # none of sglang's "only counts when a request finishes" blind spot. During
+    # prefill, though, all three counters freeze; that window is covered by the
+    # sidecar's vllm:kv_cache_usage_perc signal (see image.tag). Running an older
+    # sidecar with very long contexts and low concurrency, raise this until it
+    # covers the longest single prefill.
     stallSec: 30
     metricsTimeoutSec: 10
     # Active confirmation: once token_progress has frozen past stallSec, probe the engine --
     # 2xx = alive (no hang), timeout = confirmed hang. Default POST /v1/completions (real
     # inference path, catches a wedged scheduler that still answers /health,/v1/models);
     # empty body -> chart fills it from model.name.
-    # 不跟 charts/sglang 的 GET /health_generate:vLLM 没有等价的有界端点,
-    # /health 只调 check_health()、摸不到调度器,唯一能摸到的是 POST /v1/completions。
+    # Deliberately not sglang's GET /health_generate: vLLM has no bounded
+    # equivalent. Its /health only calls check_health() and never reaches the
+    # scheduler, so POST /v1/completions is the only probe that does.
     activeProbeEnabled: true
     activeProbePath: /v1/completions
     activeProbeMethod: POST
     activeProbeBody: ""
-    # 探测只在进度已冻结时才发,那时引擎基本空闲,一发 max_tokens=1 的请求秒回。
-    # 忙时可能慢得多(长 prefill 叠高并发的部署上实测最坏 92.6s),这类部署要自己
-    # 实测再定值(tools/vllm-chart/probe_under_prefill_inpod.sh)。
+    # The probe is only sent once progress has already frozen, when the engine is
+    # essentially idle and a max_tokens=1 request returns immediately. Under load
+    # it can be far slower -- 92.6s was measured on a deployment combining long
+    # prefills with high concurrency -- so measure your own before settling on a
+    # value.
     #
-    # ⚠️ 一条没有 render 守卫的约束:
+    # One constraint the chart does NOT enforce at render time:
     #     activeProbeTimeoutSec + pollIntervalSec < stallSec / 3
-    # 否则一两次失败就能把 stalledFor 顶到 stallSec,每轮重探就白做了。这里的
-    # 5 + 5 = 10 对 stallSec/3 = 10,正好卡在边界。注意方向:调大 activeProbeTimeoutSec
-    # 反而更容易误杀 —— 探测越慢,一个 stall 窗口里能塞进的探测越少,连败门槛越低。
+    # Otherwise one or two failures are enough to push stalledFor to stallSec and
+    # re-probing every poll buys nothing. The defaults here, 5 + 5 = 10 against
+    # stallSec / 3 = 10, sit exactly on that boundary. Note the direction:
+    # RAISING activeProbeTimeoutSec makes a false kill more likely, not less --
+    # slower probes mean fewer of them fit in a stall window, which lowers the
+    # consecutive-failure bar.
     activeProbeTimeoutSec: 5
-  # 调的是【引擎容器】的 livenessProbe(它指向本 sidecar 的 /healthz),不是 sidecar
-  # 自己的 —— sidecar 没有 liveness。与 charts/sglang 取同一个值。
+  # This tunes the ENGINE container's livenessProbe, which points at this
+  # sidecar's /healthz -- not the sidecar's own; the sidecar has no liveness
+  # probe. The sglang chart uses the same values.
   #
-  # ⚠️ 它与 sidecar 版本绑定:判 503 后 10s 就重启,而 sidecar 翻案要等一个 poll 加
-  # 一次探测(5+5),两者相当 —— 补救和处决同时到达。所以只在 stallSec 到点探一次的
-  # sidecar,任何一次慢探测都足以杀掉健康引擎。见 image.tag。
+  # It is coupled to the sidecar version: a 503 restarts the engine 10s later,
+  # while the sidecar needs one poll plus one probe (5 + 5) to change its mind.
+  # The two arrive together -- the reprieve and the execution. So with a sidecar
+  # that probes only once when stallSec elapses, a single slow probe is enough to
+  # kill a healthy engine. See image.tag.
   livenessProbe:
     periodSeconds: 5
     failureThreshold: 2
@@ -242,15 +256,17 @@ lifecycle:
     drainSeconds: 30
     # How often to re-check whether vLLM has gone idle.
     pollIntervalSeconds: 2
-  # Stage 2:SIGTERM 落地之后还给在途请求多少时间。
+  # Stage 2: how long in-flight requests get after SIGTERM lands.
   #
-  # 0 = 不下发 --shutdown-timeout,用 vLLM 自己的默认行为:SIGTERM 一到就砍掉还在跑的
-  # 请求。这是本 chart 要的姿势,与 charts/sglang 的 forceShutdown: true 同一意图 ——
-  # 排空只在 preStop 里做,那里有界(drainSeconds 封顶、空闲即提前返回)且算在
-  # terminationGracePeriodSeconds 之内。
+  # 0 means --shutdown-timeout is not passed, leaving vLLM's own behaviour:
+  # SIGTERM aborts whatever is still running. That is what this chart wants, and
+  # matches the sglang chart's forceShutdown: true -- draining happens only in
+  # preStop, where it is bounded (capped by drainSeconds, returning early once
+  # idle) and counted inside terminationGracePeriodSeconds.
   #
-  # 设成正数时,它要连同 endpointSyncSeconds + drainSeconds 一起塞进
-  # terminationGracePeriodSeconds —— chart 在 render 期会校验这个和。需要 vLLM >= 0.18.0。
+  # Set a positive value and it has to fit inside terminationGracePeriodSeconds
+  # together with endpointSyncSeconds + drainSeconds; the chart checks that sum at
+  # render time. Requires vLLM 0.18.0 or newer.
   shutdownTimeout: 0
 
 scaler:

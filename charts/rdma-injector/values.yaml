@@ -1,24 +1,30 @@
-# 证书由 Helm 在 install 时自签(SAN=rdma-injector.<Release.Namespace>.svc)→ 可装到任意 ns。
-# 装哪个 ns 由 `helm install ... -n <ns>` 决定,这里不写死。
+# The serving certificate is self-signed by Helm at install time, with a SAN of
+# rdma-injector.<Release.Namespace>.svc, so the chart installs into whatever
+# namespace `helm install -n <ns>` names. Nothing here hardcodes one.
 
 image:
   repository: 4pdosc/rdma-injector
-  tag: "0.2.0"                    # 只烤代码、不烤证书的镜像
+  tag: "0.2.0"                    # holds the webhook code only; the certificate is not baked in
   pullPolicy: IfNotPresent
 
-# failurePolicy=Fail 下是关键路径,多副本防单点(webhook 自身不带 rdma-ib label + 排除自己 ns → 无自锁)
+# With failurePolicy=Fail this webhook sits on the critical path for pod
+# creation, so run more than one. It cannot deadlock itself: it carries no
+# rdma-ib label and its own namespace is excluded (see namespaceSelector).
 replicas: 2
 
-# 只拦带这些 label 的 pod(谁要 RDMA 谁打;与模型无关)
+# Only pods carrying these labels are intercepted. Label whatever needs RDMA;
+# this has nothing to do with which model runs there.
 objectSelectorLabels:
   rdma-ib: "true"
 
-# webhook 挂了是否拒绝带 label 的 pod 创建:
-#   Fail   = fail-closed(宁可清晰报错不启动,也不静默起个没注入 RDMA 的坏 pod)—— 推荐
-#   Ignore = fail-open(webhook 挂了照常放行,但 pod 不会被注入)
+# What happens to a labelled pod when the webhook is unreachable:
+#   Fail   -- fail closed. A clear error beats silently starting a pod that
+#             needed RDMA and did not get it. Recommended.
+#   Ignore -- fail open. The pod is admitted, uninjected.
 failurePolicy: Fail
 
-# 自签证书有效期(天)。首次 install 签一次;之后 upgrade 用 lookup 复用已有 Secret,不重签。
+# Validity of the self-signed certificate, in days. Signed once on install;
+# later upgrades reuse the existing Secret rather than re-signing.
 certValidityDays: 3650
 
 resources:

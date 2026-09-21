@@ -11,6 +11,6 @@ sources:
   - https://github.com/project-modelpilot/helm-charts
   - https://github.com/project-modelpilot/cache_aware_router
 type: application
-version: 0.2.1
+version: 0.2.2
 appVersion: "v0.6.4"
 keywords: [cache-aware-router, routing, autoconfig]

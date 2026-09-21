@@ -10,18 +10,21 @@
 # the sidecar ignores them without a log file anyway, but leaving them out keeps
 # "is the fast path armed?" answerable by reading the ConfigMap alone.
 {{- $c := .Values.hangWatcher.config }}
-{{- /* `helm upgrade --reuse-values` 复用的是上一版【用户提供】的 values,不会补上新 chart 才
-       新增的键。任何在自己 values 里写过 hangWatcher.config.* 的 release(生产三个都写了
-       stallSec)升级时,$c.logHang 就是 nil,直接 `nil pointer evaluating interface{}.enabled`
-       整个 upgrade 失败 —— 2026-09-08 在测试集群实测到。别指望调用方永远记得用
-       --reset-then-reuse-values,模板自己兜住。 */}}
+{{- /* `helm upgrade --reuse-values` reuses the previous USER-SUPPLIED values and
+       does not fill in keys the new chart added. Any release that set
+       hangWatcher.config.* itself therefore upgrades with $c.logHang == nil,
+       which fails the whole upgrade with
+       `nil pointer evaluating interface{}.enabled`. Do not rely on callers
+       remembering --reset-then-reuse-values; the template defends itself. */}}
 {{- $logHang := $c.logHang | default dict }}
-{{- /* logHang 存在的意义就是「有第二个信号时【更早】判」。它的 stallSec 若不小于外层的
-       stallSec,快判永远不可能先于普通路径触发 —— 配了等于没配,而且没有任何提示
-       (schema 只校验 minimum: 1,两个相等看着完全合法)。这种静默失效比报错难查得多,
-       所以在 render 期就拦掉。
-       2026-09-09 踩:外层 stallSec 从 60 降到 30 时,忘了跟着降 logHang.stallSec,
-       两个都是 30,快判彻底失效而无人察觉。 */}}
+{{- /* The whole point of logHang is to decide EARLIER when a second signal is
+       available. If its stallSec is not below the outer stallSec, the fast path
+       can never fire before the ordinary one -- configured but inert, with
+       nothing to say so (the schema only checks minimum: 1, and two equal values
+       look perfectly legal). That silent no-op is far harder to find than an
+       error, so it is rejected at render time.
+       Seen in practice: the outer stallSec was lowered from 60 to 30 and
+       logHang.stallSec was left at 30, disabling the fast path unnoticed. */}}
 {{- if $logHang.enabled }}
 {{- $ls := int ($logHang.stallSec | default 15) }}
 {{- $ss := int ($c.stallSec | default 30) }}
@@ -46,10 +49,13 @@ metadata:
 data:
   config.json: |
     {
-      {{- /* 每个字段都带 default:同上,--reuse-values 时 $c 里可能只剩用户显式写过的那几个键,
-             缺的会渲染成空 -> `"poll_interval_sec": ,` 这种非法 JSON。sidecar 解析失败会静默
-             退回它自己的内置默认值(不 crash),于是这里配的 stall_sec 就悄悄失效了 ——
-             比报错更难发现,所以宁可在模板里把默认值写死一份。 */}}
+      {{- /* Every field carries a default for the same reason: under
+             --reuse-values, $c may hold only the keys the user wrote, and a
+             missing one renders as nothing -> `"poll_interval_sec": ,`, which is
+             invalid JSON. The sidecar does not crash on that; it silently falls
+             back to its own built-in defaults, so the stall_sec configured here
+             quietly stops applying. Harder to notice than an error, hence the
+             duplicated defaults. */}}
       "poll_interval_sec": {{ $c.pollIntervalSec | default 15 }},
       "stall_sec": {{ $c.stallSec | default 60 }},
       "metrics_timeout_sec": {{ $c.metricsTimeoutSec | default 10 }},

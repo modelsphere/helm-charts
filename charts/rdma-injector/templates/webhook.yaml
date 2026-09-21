@@ -1,7 +1,9 @@
 {{/*
-  serving 证书:首次 install 用 genSignedCert 自签(SAN=rdma-injector.<ns>.svc);
-  之后 upgrade 用 lookup 复用已有 Secret 的证书,不重签(避免 churn)。
-  ⚠️ lookup 在 `helm template`/`--dry-run` 下返回空 → 那种纯渲染会临时生成一张丢弃证书,不影响真实 apply。
+  The serving certificate is self-signed with genSignedCert on first install
+  (SAN rdma-injector.<ns>.svc). Upgrades look the existing Secret up and reuse
+  it rather than re-signing, so the certificate does not churn.
+  Note that lookup returns nothing under `helm template` and `--dry-run`, so a
+  pure render mints a throwaway certificate. That does not affect a real apply.
 */}}
 {{- $ns := .Release.Namespace -}}
 {{- $svc := "rdma-injector" -}}
@@ -44,16 +46,16 @@ webhooks:
 - name: rdma-injector.{{ $ns }}.svc
   clientConfig:
     service: { name: {{ $svc }}, namespace: {{ $ns }}, path: /mutate, port: 443 }
-    caBundle: {{ $caCrt }}                          # 与上面 Secret 里的 serving 证书配套(同一张 CA)
+    caBundle: {{ $caCrt }}                          # the CA that signed the serving certificate in the Secret above
   rules:
   - operations: ["CREATE"]
     apiGroups: [""]
     apiVersions: ["v1"]
     resources: ["pods"]
     scope: "Namespaced"
-  objectSelector:                                   # 只拦带此 label 的 pod —— 谁要 RDMA 谁打
+  objectSelector:                                   # only pods carrying this label are intercepted
     matchLabels: {{ toYaml .Values.objectSelectorLabels | nindent 6 }}
-  namespaceSelector:                                # 双保险:永不碰 webhook 自己所在 ns
+  namespaceSelector:                                # belt and braces: never touch the webhook own namespace
     matchExpressions:
     - { key: kubernetes.io/metadata.name, operator: NotIn, values: [{{ $ns | quote }}] }
   failurePolicy: {{ .Values.failurePolicy }}

@@ -9,7 +9,7 @@ spec:
   selector:
     {{- include "cart.selectorLabels" . | nindent 4 }}
     {{- if .Values.ha.enabled }}
-    {{ include "cart.name" . }}-active: "true"   # 只选 leader pod(ha-gate 打的 active 标签)
+    {{ include "cart.name" . }}-active: "true"   # selects only the leader (the label ha-gate sets on itself)
     {{- end }}
   ports:
     - name: http

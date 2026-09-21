@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 # rdma-injector —— Mutating Admission Webhook
 #
-# 作用:给带 label `rdma-ib: "true"` 的 pod 自动注入「节点 RDMA 环境」的管道,让业务
-#       manifest 保持干净(不用写 hostPath 挂载 / source /etc/gpu-node/nccl-ib.env)。
+# Wires pods labelled `rdma-ib: "true"` into the node's RDMA environment, so that
+# workload manifests stay free of the hostPath mount and the `source` line that
+# would otherwise have to be repeated in every one of them.
 #
-# 注入内容(幂等,已存在则跳过):
-#   1) volume `gpunode` = hostPath /etc/gpu-node(node_prep_rdma.sh 生成的本机好 IB 口文件所在)
-#   2) 每个容器:volumeMount gpunode → /etc/gpu-node (ro)
-#   3) 每个「以 shell 起(bash/sh + -c/-lc)」的容器:在启动脚本最前面 prepend 一段 source,
-#      把 /etc/gpu-node/nccl-ib.env 里的 NCCL_IB_HCA 导入环境 → NCCL 只用本机好 IB 口。
+# What it injects (idempotently -- anything already present is left alone):
+#   1) a volume `gpunode`, hostPath /etc/gpu-node, where the node's list of
+#      healthy InfiniBand ports is written by the node preparation script;
+#   2) on every container, a read-only volumeMount of it at /etc/gpu-node;
+#   3) on every container started through a shell (bash/sh with -c or -lc), a
+#      snippet prepended to the start-up script that sources
+#      /etc/gpu-node/nccl-ib.env, putting NCCL_IB_HCA into the environment so
+#      NCCL only uses the ports that are healthy on that node.
 #
-# 为什么在容器启动时 source 而不是 webhook 直接填值:准入(CREATE)时 pod 还没调度,webhook
-# 不知道会落到哪台 → 拿不到 per-node 的 NCCL_IB_HCA 字面值;故注入「到节点再解析」的管道。
+# Why source it at container start rather than have the webhook fill the value
+# in: admission happens before scheduling, so the webhook does not yet know
+# which node the pod will land on and cannot know that node's NCCL_IB_HCA. What
+# it injects is the plumbing to resolve it once the pod is there.
 #
-# 运行:复用 harbor 已有的 sglang 镜像跑本脚本(自带 python3 + ssl 标准库,air-gap 免造新镜像),
-#       脚本经 ConfigMap 挂到 /app,TLS 证书经 Secret 挂到 /tls。监听 :8443。
+# Runs as a small HTTP server on :8443 with the TLS certificate mounted from a
+# Secret at /tls. Only the Python standard library is used.
 import json, base64, ssl, os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -28,7 +34,7 @@ def build_patch(pod):
     spec = pod.get("spec", {}) or {}
     patch = []
 
-    # 1) volume(数组不存在则整体创建)
+    # 1) the volume (creating the whole array if the pod has none)
     vols = spec.get("volumes")
     vol = {"name": VOL_NAME, "hostPath": {"path": GPU_NODE_DIR, "type": "Directory"}}
     if vols is None:
@@ -36,7 +42,7 @@ def build_patch(pod):
     elif not any(v.get("name") == VOL_NAME for v in vols):
         patch.append({"op": "add", "path": "/spec/volumes/-", "value": vol})
 
-    # 2) 每容器:volumeMount + 3) 包一层 source
+    # 2) per container: the volumeMount, and 3) the sourcing snippet
     for i, c in enumerate(spec.get("containers", []) or []):
         mounts = c.get("volumeMounts")
         mnt = {"name": VOL_NAME, "mountPath": GPU_NODE_DIR, "readOnly": True}
@@ -50,7 +56,7 @@ def build_patch(pod):
         is_shell = len(cmd) >= 2 and os.path.basename(cmd[0]) in ("bash", "sh") \
             and any(f in cmd for f in ("-c", "-lc"))
         if is_shell and args:
-            j = len(args) - 1                      # 脚本正文通常是最后一个 arg
+            j = len(args) - 1                      # the script body is normally the last arg
             if SNIPPET not in args[j]:
                 patch.append({"op": "replace",
                               "path": "/spec/containers/%d/args/%d" % (i, j),
@@ -70,7 +76,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             patch = build_patch(pod)
         except Exception:
-            patch = []                              # 出错也放行,绝不阻塞 pod 创建
+            patch = []                              # admit on error: never block pod creation
         resp = {"apiVersion": body.get("apiVersion", "admission.k8s.io/v1"),
                 "kind": "AdmissionReview",
                 "response": {"uid": req.get("uid", ""), "allowed": True}}

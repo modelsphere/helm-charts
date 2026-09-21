@@ -15,49 +15,52 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/name: {{ include "cart.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
-{{/* cart-config 名:默认 <fullname>-config(按 release 唯一,多 cart 同 ns 不撞);可用 configMapName 覆盖。
-     ModelRoute.cart.outputConfigMap 可指这个名,也可指某条覆盖层 CM。 */}}
+{{/* Config ConfigMap name. Defaults to <fullname>-config, which is unique per
+     release so several CARTs can share a namespace; override with configMapName.
+     ModelRoute.cart.outputConfigMap may point either here or at an overlay. */}}
 {{- define "cart.configMapName" -}}
 {{- .Values.configMapName | default (printf "%s-config" (include "cart.fullname" .)) -}}
 {{- end -}}
 
-{{/* ---- configOverlays(覆盖层):同一个 CM 里的额外 key,按序追加 -c,后者覆盖前者 ---- */}}
+{{/* ---- configOverlays: extra keys in the same ConfigMap, appended as further
+     -c files in list order. Later files win. ---- */}}
 
-{{/* 校验:key 合法、不重名、autoconfig 最多一条且不带 content。 */}}
+{{/* Validation: keys must be legal and unique, and at most one may be marked
+     autoconfig -- which must not also carry content. */}}
 {{- define "cart.configOverlays.check" -}}
 {{- $seen := dict -}}
 {{- $auto := 0 -}}
 {{- range $i, $o := .Values.configOverlays -}}
 {{- $k := $o.key | default "" -}}
-{{- if not $k -}}{{- fail (printf "configOverlays[%d]:必须设 key" $i) -}}{{- end -}}
+{{- if not $k -}}{{- fail (printf "configOverlays[%d]: key is required" $i) -}}{{- end -}}
 {{- if not (regexMatch "^[-._a-zA-Z0-9]+$" $k) -}}
-{{- fail (printf "configOverlays[%d].key=%q 非法:ConfigMap key 只能用字母/数字/`-`/`_`/`.`" $i $k) -}}
+{{- fail (printf "configOverlays[%d].key=%q is not a valid ConfigMap key: use letters, digits, '-', '_' or '.'" $i $k) -}}
 {{- end -}}
 {{- if eq $k "config.yaml" -}}
-{{- fail (printf "configOverlays[%d].key 不能是 config.yaml(那是 baseConfig 的 key)" $i) -}}
+{{- fail (printf "configOverlays[%d].key cannot be config.yaml -- that key holds baseConfig" $i) -}}
 {{- end -}}
-{{- if hasKey $seen $k -}}{{- fail (printf "configOverlays:key %q 重复" $k) -}}{{- end -}}
+{{- if hasKey $seen $k -}}{{- fail (printf "configOverlays: duplicate key %q" $k) -}}{{- end -}}
 {{- $_ := set $seen $k true -}}
 {{- if $o.autoconfig -}}
 {{- $auto = add1 $auto -}}
 {{- if hasKey $o "content" -}}
-{{- fail (printf "configOverlays[%d](%s):autoconfig 的 key 由 autoconfig 写,chart 不渲染它 —— 模板一出这个 key,helm upgrade 就会盖掉写进去的 workers" $i $k) -}}
+{{- fail (printf "configOverlays[%d] (%s): a key marked autoconfig is written by the controller, so the chart must not render it -- emit it once and helm upgrade will overwrite the workers written there" $i $k) -}}
 {{- end -}}
 {{- else if not (hasKey $o "content") -}}
-{{- fail (printf "configOverlays[%d](%s):要么给 content,要么标 autoconfig: true" $i $k) -}}
+{{- fail (printf "configOverlays[%d] (%s): set either content or autoconfig: true" $i $k) -}}
 {{- end -}}
 {{- end -}}
 {{- if gt $auto 1 -}}
-{{- fail (printf "configOverlays:最多一条 autoconfig: true,现在有 %d 条" $auto) -}}
+{{- fail (printf "configOverlays: at most one entry may set autoconfig: true, found %d" $auto) -}}
 {{- end -}}
 {{- end -}}
 
-{{/* 标了 autoconfig: true 那条的 key(没有则空)。ModelRoute.cart.outputKey 用它。 */}}
+{{/* The key marked autoconfig: true, or empty. ModelRoute.cart.outputKey uses it. */}}
 {{- define "cart.autoconfigKey" -}}
 {{- range .Values.configOverlays -}}{{- if .autoconfig -}}{{- .key -}}{{- end -}}{{- end -}}
 {{- end -}}
 
-{{/* 全部配置文件路径,空格分隔,按加载顺序(底稿在前)。 */}}
+{{/* All config file paths, space separated, in load order (base first). */}}
 {{- define "cart.configFiles" -}}
 {{- $files := list "/workspace/configs/config.yaml" -}}
 {{- range .Values.configOverlays -}}

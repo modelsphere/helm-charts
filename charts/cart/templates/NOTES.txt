@@ -1,17 +1,31 @@
-cache-aware-router 已部署({{ include "cart.fullname" . }})。
+cache-aware-router is deployed as {{ include "cart.fullname" . }}.
 
-镜像: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
-配置 ConfigMap:{{ include "cart.configMapName" . }}(挂到 /workspace/configs),加载顺序:
-  config.yaml(底稿,chart 建)
+Image:  {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+Config: ConfigMap {{ include "cart.configMapName" . }}, mounted at /workspace/configs
+        and loaded in this order:
+
+  config.yaml (the base, rendered by this chart)
 {{- range .Values.configOverlays }}
-  {{ .key }}{{ if .autoconfig }}(autoconfig 写;ModelRoute.cart.outputKey 设成 {{ .key }}){{ else }}(chart 建){{ end }}
+  {{ .key }}{{ if .autoconfig }} (written by the controller -- point ModelRoute.cart.outputKey at {{ .key }}){{ else }} (rendered by this chart){{ end }}
 {{- end }}
-  后者覆盖前者。workers 之外的改动不热更,要 kubectl rollout restart deploy/{{ include "cart.fullname" . }}
-{{- if .Values.reload.enabled }}
-reload: sidecar autoconfig-reload watch /workspace/configs → SIGHUP cache-aware-router(热更 workers)
-{{- end }}
-Service :{{ .Values.service.port }}(需与 ModelRoute.cart.port 一致)
 
-配置更新(不冲突):
-  - autoconfig:往 ModelRoute.cart.outputConfigMap/outputKey 指的 key 写 workers;
-  - 手动:kubectl edit cm {{ include "cart.configMapName" . }},或改 values 后 helm upgrade。
+Later files win. Only the worker list is reloaded in place; any other change
+needs a restart:
+
+  kubectl rollout restart deploy/{{ include "cart.fullname" . }}
+{{- if .Values.reload.enabled }}
+
+The autoconfig-reload sidecar watches /workspace/configs and sends SIGHUP to
+cache-aware-router, which is what makes the worker list hot-reloadable.
+{{- end }}
+
+Service listens on :{{ .Values.service.port }}.
+
+To change the configuration:
+
+  - a controller writes the worker list into the key that
+    ModelRoute.cart.outputConfigMap / outputKey point at;
+  - by hand, either `kubectl edit cm {{ include "cart.configMapName" . }}`
+    or edit values and `helm upgrade`.
+
+The two do not collide, as long as the controller owns a key of its own.

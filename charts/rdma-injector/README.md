@@ -1,54 +1,84 @@
-# rdma-injector（Helm chart 版）
+# rdma-injector
 
-给带 label `rdma-ib: "true"` 的 pod 自动注入「节点 RDMA 环境」的 mutating admission webhook：
-`/etc/gpu-node` hostPath 挂载 + 启动时 `source /etc/gpu-node/nccl-ib.env`（本机好 IB 口 → `NCCL_IB_HCA`），
-业务 manifest 保持零 RDMA 样板。逻辑见 `image/inject_webhook.py`。
+A mutating admission webhook that wires pods labelled `rdma-ib: "true"` into the
+node's RDMA environment, so workload manifests stay free of the boilerplate:
 
-## 相比老版（`../webhook/`，deploy.sh + ConfigMap 注入）的变化
-- **代码烤进镜像**（`image/`），不再用 ConfigMap 挂代码；
-- **serving 证书由 Helm 在 install 时自签**（`genSignedCert`，SAN=`rdma-injector.<Release.Namespace>.svc`）→ 塞进 Secret 挂到 `/tls`，caBundle 由 helm 自动填 → **可装到任意 namespace**（`helm install -n <ns>`）；
-- 首次 install 签一次;之后 `helm upgrade` 用 `lookup` **复用**已有 Secret 的证书，**不重签**；
-- 部署 = 一条 `helm install`，不再需要 deploy.sh 现签 + 手动注 caBundle。
+- a read-only hostPath mount of `/etc/gpu-node`, and
+- a snippet prepended to the container's start-up script that runs
+  `source /etc/gpu-node/nccl-ib.env`, putting that node's healthy InfiniBand
+  ports into `NCCL_IB_HCA`.
 
-## 目录
+The logic is in [`image/inject_webhook.py`](image/inject_webhook.py) and uses
+nothing outside the Python standard library.
+
+## Layout
+
 ```
 rdma-injector/
   Chart.yaml  values.yaml  README.md  test-inject.sh
-  image/  Dockerfile  inject_webhook.py          # 只烤代码,不烤证书
+  image/
+    Dockerfile  inject_webhook.py     # code only -- no certificate is baked in
   templates/
-    deployment.yaml   # 挂 helm 生成的 Secret(/tls)
+    deployment.yaml   # mounts the Secret Helm generates at /tls
     service.yaml
-    webhook.yaml      # 自签证书 → Secret + MutatingWebhookConfiguration(caBundle)
+    webhook.yaml      # self-signed cert -> Secret + MutatingWebhookConfiguration
 ```
 
-## 用法
+## Install
 
-### 1) 构建 + push 镜像（改了代码才需要重做；证书不再进镜像）
+```bash
+helm install rdma-injector modelpilot/rdma-injector -n kube-system
+```
+
+Any namespace works -- the certificate's SAN follows `Release.Namespace`:
+
+```bash
+helm install rdma-injector modelpilot/rdma-injector -n rdma-system --create-namespace
+helm upgrade rdma-injector modelpilot/rdma-injector -n rdma-system
+```
+
+Then label any pod outside the webhook's own namespace with `rdma-ib: "true"`
+and it is injected on creation.
+
+## Building the image
+
+Only needed if you change the code.
+
 ```bash
 cd image
 docker build -t 4pdosc/rdma-injector:0.2.0 .
 docker push 4pdosc/rdma-injector:0.2.0
 ```
 
-### 2) 安装 chart（任意 ns）
-```bash
-helm install rdma-injector ./rdma-injector -n kube-system
-# 装别的 ns 也行,证书 SAN 会按该 ns 自签:
-#   helm install rdma-injector ./rdma-injector -n rdma-system --create-namespace
-# 升级(复用证书不重签):
-#   helm upgrade rdma-injector ./rdma-injector -n <ns>
-```
-之后给任意 pod（非 webhook 所在 ns）打 `label rdma-ib: "true"` 即自动注入。
+## End-to-end test
 
-### 端到端测试
 ```bash
-HELM=helm CHART=./rdma-injector bash test-inject.sh   # helm install + dry-run=server 验注入 + uninstall
+HELM=helm CHART=./rdma-injector bash test-inject.sh
 ```
 
-## 证书说明
-- 证书由 Helm `genSignedCert` 自签，SAN=`rdma-injector.<安装ns>.svc`；apiserver 调 webhook 时用 caBundle（同一 CA）校验，故 SAN 必须匹配 Service DNS —— helm 用 `Release.Namespace` 自动对齐，所以换 ns 无需任何改动。
-- 有效期 `values.certValidityDays`（默认 3650 天）。`lookup` 复用逻辑保证 upgrade 不换证书；要强制重签：删掉 Secret `rdma-injector-certs` 再 upgrade。
+Installs the chart, uses `--dry-run=server` (which goes through the real webhook
+without persisting anything) to confirm a labelled pod is injected and an
+unlabelled one is not, then uninstalls.
 
-## 设计要点（沿用老版）
-- `failurePolicy: Fail`（fail-closed）：webhook 挂了就拒绝带 label 的 pod 创建 → 故 `replicas: 2` HA；webhook 自身不带 `rdma-ib` label + `namespaceSelector` 排除自己 ns → 无自我死锁。
-- 注入用「到节点再 source」的管道而非 webhook 直接填值：准入（CREATE）时 pod 还没调度，webhook 不知落到哪台、拿不到 per-node 的 `NCCL_IB_HCA` 字面值。
+## Certificates
+
+Helm self-signs the serving certificate with `genSignedCert`, SAN
+`rdma-injector.<namespace>.svc`, and fills in the matching `caBundle`. The
+apiserver validates the webhook against that CA, so the SAN has to match the
+Service's DNS name -- deriving it from `Release.Namespace` is what makes the
+chart namespace-agnostic.
+
+Validity is `certValidityDays` (3650 by default). Upgrades look the existing
+Secret up and reuse it, so the certificate does not churn; to force a new one,
+delete the `rdma-injector-certs` Secret and upgrade again.
+
+## Design notes
+
+**`failurePolicy: Fail`.** If the webhook is unreachable, creation of a labelled
+pod is rejected rather than silently admitted without RDMA — hence `replicas: 2`.
+It cannot deadlock itself: the webhook carries no `rdma-ib` label, and its own
+namespace is excluded by `namespaceSelector`.
+
+**Why the snippet instead of the value.** Admission happens before scheduling,
+so the webhook does not know which node the pod will land on and cannot know
+that node's `NCCL_IB_HCA`. It injects the plumbing to resolve it on the node.

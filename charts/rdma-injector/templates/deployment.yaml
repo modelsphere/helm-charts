@@ -10,9 +10,9 @@ spec:
   template:
     metadata: { labels: { app: rdma-injector } }
     spec:
-      tolerations:                                  # 允许落到 control-plane 节点
+      tolerations:                                  # allow scheduling onto control-plane nodes
       - { operator: Exists }
-      affinity:                                     # 尽量把副本分到不同节点
+      affinity:                                     # prefer to spread replicas across nodes
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
@@ -21,7 +21,8 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
       - name: webhook
-        # 代码烤在镜像里;serving 证书由 helm 自签 → Secret 挂到 /tls
+        # The code is in the image; the serving certificate is self-signed by
+        # Helm into a Secret and mounted at /tls.
         image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         ports: [{ containerPort: 8443 }]
