@@ -2,7 +2,7 @@
 # 装哪个 ns 由 `helm install ... -n <ns>` 决定,这里不写死。
 
 image:
-  repository: modelpilot/rdma-injector
+  repository: 4pdosc/rdma-injector
   tag: "0.2.0"                    # 只烤代码、不烤证书的镜像
   pullPolicy: IfNotPresent
 

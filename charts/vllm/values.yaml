@@ -149,7 +149,7 @@ livenessProbe:
 hangWatcher:
   enabled: true              # default on; false = fall back to the engine's own livenessProbe, drop the sidecar (e.g. image unreachable)
   image:
-    repository: "modelpilot/hang-watcher"
+    repository: "4pdosc/hang-watcher"
     # >= 0.1.22 是硬要求,下面的 stallSec 和 livenessProbe 都依赖它:它的
     # vllm:kv_cache_usage_perc 判据覆盖 prefill 盲区,且每轮停滞都探(判死需要连续
     # 失败,而非一次探测超时)。更老的版本必须放大 stallSec 到能盖住最长的一次 prefill。
@@ -429,7 +429,7 @@ cart:
     - key: workers.yaml
       autoconfig: true
   # image:
-  #   repository: modelpilot/cache_aware_router
+  #   repository: 4pdosc/cache_aware_router
   #   tag: ""            # defaults to the subchart's appVersion
   # CART's listen port, which the ModelRoute's cart.port follows.
   # service:

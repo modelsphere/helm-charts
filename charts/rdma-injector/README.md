@@ -26,8 +26,8 @@ rdma-injector/
 ### 1) 构建 + push 镜像（改了代码才需要重做；证书不再进镜像）
 ```bash
 cd image
-docker build -t modelpilot/rdma-injector:0.2.0 .
-docker push modelpilot/rdma-injector:0.2.0
+docker build -t 4pdosc/rdma-injector:0.2.0 .
+docker push 4pdosc/rdma-injector:0.2.0
 ```
 
 ### 2) 安装 chart（任意 ns）

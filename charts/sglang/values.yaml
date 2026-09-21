@@ -222,7 +222,7 @@ livenessProbe:
 hangWatcher:
   enabled: true              # default on; false = fall back to the engine's own livenessProbe, drop the sidecar (e.g. image unreachable)
   image:
-    repository: "modelpilot/hang-watcher"
+    repository: "4pdosc/hang-watcher"
     # >= 0.1.22 is required by the livenessProbe below (5s x 2): 10s is shorter than
     # one probe timeout plus one poll, so a sidecar that probes only once -- at the
     # moment stallSec expires -- lets a single slow probe kill a healthy engine.
@@ -528,7 +528,7 @@ cart:
     - key: workers.yaml
       autoconfig: true
   # image:
-  #   repository: modelpilot/cache_aware_router
+  #   repository: 4pdosc/cache_aware_router
   #   tag: ""            # defaults to the subchart's appVersion
   # CART's listen port, which the ModelRoute's cart.port follows.
   # service:

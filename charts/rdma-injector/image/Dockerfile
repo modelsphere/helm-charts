@@ -4,8 +4,8 @@
 # 所以 chart 可装到任意 namespace。见 ../templates/webhook.yaml。
 #
 # 构建(在能拉到 python:3.12-alpine 的机器上,如 chat):
-#   cd image && docker build -t modelpilot/rdma-injector:0.2.0 .
-#   docker push modelpilot/rdma-injector:0.2.0
+#   cd image && docker build -t 4pdosc/rdma-injector:0.2.0 .
+#   docker push 4pdosc/rdma-injector:0.2.0
 FROM python:3.12-alpine
 
 COPY inject_webhook.py /app/inject_webhook.py

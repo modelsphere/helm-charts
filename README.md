@@ -38,7 +38,7 @@ README, since that is the file that is kept current.
 ## Images
 
 The charts default to public images on Docker Hub under
-[`modelpilot`](https://hub.docker.com/u/modelpilot), alongside upstream
+[`4pdosc`](https://hub.docker.com/u/4pdosc), alongside upstream
 `lmsysorg/sglang` and `vllm/vllm-openai` for the engines. Point them at your own
 registry by overriding the `image` values — a mirror is worth setting up if your
 cluster has no egress.
