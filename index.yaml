@@ -1,5 +1,46 @@
 apiVersion: v1
 entries:
+  bodylog:
+  - apiVersion: v2
+    appVersion: 0.1.13
+    created: "2026-09-21T15:24:28.034323841Z"
+    description: 'Body-log listener for the OpenResty router: receives full request/response
+      frames over TCP, writes them as hourly JSONL, and serves rollups over HTTP'
+    digest: 00260961711a055162aeeea49c431e543802f7044d2e76c88f11b6fd016d287d
+    home: https://github.com/project-modelpilot/helm-charts
+    keywords:
+    - bodylog
+    - openresty
+    - observability
+    name: bodylog
+    sources:
+    - https://github.com/project-modelpilot/helm-charts
+    - https://github.com/project-modelpilot/llm-openresty
+    type: application
+    urls:
+    - https://github.com/project-modelpilot/helm-charts/releases/download/bodylog-0.2.0/bodylog-0.2.0.tgz
+    version: 0.2.0
+  bodylog-exporter:
+  - apiVersion: v2
+    appVersion: 0.2.6
+    created: "2026-09-21T15:24:28.250972894Z"
+    description: Turns the body-log listener's detail records into Prometheus metrics,
+      and polls the router's control-plane endpoints for live routing state
+    digest: c112d535fc682ca85abd968633192cadca1c9f0099897b940a6682e1e85f4eff
+    home: https://github.com/project-modelpilot/helm-charts
+    keywords:
+    - bodylog
+    - exporter
+    - prometheus
+    - observability
+    name: bodylog-exporter
+    sources:
+    - https://github.com/project-modelpilot/helm-charts
+    - https://github.com/project-modelpilot/llm-openresty
+    type: application
+    urls:
+    - https://github.com/project-modelpilot/helm-charts/releases/download/bodylog-exporter-0.2.0/bodylog-exporter-0.2.0.tgz
+    version: 0.2.0
   cart:
   - apiVersion: v2
     appVersion: v0.6.4
@@ -57,6 +98,28 @@ entries:
     type: application
     urls:
     - https://github.com/project-modelpilot/helm-charts/releases/download/cart-0.2.0/cart-0.2.0.tgz
+    version: 0.2.0
+  openresty:
+  - apiVersion: v2
+    appVersion: 0.1.20
+    created: "2026-09-21T15:24:28.479459285Z"
+    description: 'Session-affinity router for LLM inference backends: pins a conversation
+      to the backend that already holds its prefix cache, with active health checking,
+      adaptive concurrency and full body logging'
+    digest: 1997abd076c750c434cbf63450757f760346ecfcbb0c21a53c4e6cb84a8b759b
+    home: https://github.com/project-modelpilot/helm-charts
+    keywords:
+    - openresty
+    - routing
+    - session-affinity
+    - autoconfig
+    name: openresty
+    sources:
+    - https://github.com/project-modelpilot/helm-charts
+    - https://github.com/project-modelpilot/llm-openresty
+    type: application
+    urls:
+    - https://github.com/project-modelpilot/helm-charts/releases/download/openresty-0.2.0/openresty-0.2.0.tgz
     version: 0.2.0
   rdma-injector:
   - apiVersion: v2
@@ -279,4 +342,4 @@ entries:
     urls:
     - https://github.com/project-modelpilot/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-09-21T07:00:28.559740344Z"
+generated: "2026-09-21T15:24:28.479495182Z"
