@@ -1,0 +1,22 @@
+The body-log exporter is deployed, separately from the listener.
+
+  Deployment     : {{ include "bodylog-exporter.fullname" . }}   (strategy={{ .Values.strategy }}, single replica)
+  /metrics       : Service {{ include "bodylog-exporter.fullname" . }}:{{ .Values.port }}
+  ServiceMonitor : {{ if .Values.serviceMonitor.enabled }}enabled (release={{ .Values.serviceMonitor.releaseLabel }}){{ else }}disabled{{ end }}
+  Records from   : {{ .Values.data.hostPath }}/metrics/details  (read-only; same node as the listener)
+  Gap filling    : http://{{ .Values.listener.service }}:{{ .Values.listener.httpPort }}
+  Prometheus job : {{ .Values.serviceMonitor.jobName | default (printf "%s (the Service name)" (include "bodylog-exporter.fullname" .)) }}
+  Checkpoint     : {{ if .Values.checkpoint.emptyDir }}emptyDir -- testing only; a restart re-reads the day{{ else if .Values.checkpoint.hostPath }}{{ .Values.checkpoint.hostPath }} (on the node, so upgrades do not reset counters){{ else }}{{ dir .Values.data.hostPath }}/{{ include "bodylog-exporter.fullname" . }}-ckpt (on the node, so upgrades do not reset counters){{ end }}
+
+Upgrading this chart rolls only this pod: the listener keeps receiving and
+writing throughout.
+
+Two things must stay in step with the listener, or this exporter reads nothing:
+it has to run on the same node (nodeSelector), and data.hostPath must equal the
+listener's persistence.hostPath.
+{{- if ne (.Values.dateTz | default .Values.timezone) .Values.timezone }}
+
+NOTE: dateTz ({{ .Values.dateTz }}) differs from timezone ({{ .Values.timezone }}).
+Daily files are named by the listener's time zone; if these disagree with it,
+this exporter looks for files that do not exist.
+{{- end }}

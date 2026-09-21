@@ -1,0 +1,13 @@
+apiVersion: v2
+name: bodylog
+description: "Body-log listener for the OpenResty router: receives full request/response frames over TCP, writes them as hourly JSONL, and serves rollups over HTTP"
+home: https://github.com/project-modelpilot/helm-charts
+sources:
+  - https://github.com/project-modelpilot/helm-charts
+  - https://github.com/project-modelpilot/llm-openresty
+type: application
+version: 0.2.0
+# The listener image tag: values.image.tag is empty by default and falls back to
+# this, so a release moves both together.
+appVersion: "1.0.0"
+keywords: [bodylog, openresty, observability]

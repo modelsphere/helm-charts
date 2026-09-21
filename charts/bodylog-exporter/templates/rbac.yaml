@@ -1,0 +1,62 @@
+# What the exporter's ServiceAccount needs:
+#
+#   1) list/watch ModelRoute -- discovering which routes to poll, and labelling
+#      metrics with the route they belong to;
+#   2) list/watch EndpointSlice -- resolving a route's backing pod IPs, so a
+#      record can be attributed to the route that served it;
+#   3) get pods and workloads -- reporting the desired replica count: take a pod
+#      from an EndpointSlice's targetRef and walk ownerReferences up to the
+#      top-level workload to read spec.replicas. It has to walk all the way up.
+#      During a rolling update an intermediate controller's spec.replicas is
+#      temporarily inflated by maxSurge, so stopping there reports a surge value
+#      and makes a fully staffed service look degraded.
+#
+# Without (1): polling and labelling get 403. Without (2): pod IPs cannot be
+# resolved and the route label stays "unknown". Without (3): only the
+# desired-replicas gauge is missing (with a 403 in the log); every other metric
+# is unaffected.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "bodylog-exporter.fullname" . }}
+  labels: {{- include "bodylog-exporter.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "bodylog-exporter.fullname" . }}-modelroute-reader
+  labels: {{- include "bodylog-exporter.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [ "{{ .Values.routeDiscovery.apiGroup }}" ]
+    resources: [ "{{ .Values.routeDiscovery.plural }}" ]
+    verbs: [ "get", "list", "watch" ]
+  - apiGroups: [ "discovery.k8s.io" ]
+    resources: [ "endpointslices" ]
+    verbs: [ "get", "list", "watch" ]
+  # The ownerReference walk. "get" is enough: every step names an exact object
+  # taken from the ownerReference, so nothing here needs list or watch.
+  - apiGroups: [ "" ]
+    resources: [ "pods" ]
+    verbs: [ "get" ]
+  - apiGroups: [ "apps" ]
+    resources: [ "replicasets", "deployments", "statefulsets" ]
+    verbs: [ "get" ]
+  {{- range .Values.desiredReplicas.extraOwnerApiGroups }}
+  - apiGroups: [ "{{ .apiGroup }}" ]
+    resources: {{ toJson .resources }}
+    verbs: [ "get" ]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "bodylog-exporter.fullname" . }}-modelroute-reader
+  labels: {{- include "bodylog-exporter.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "bodylog-exporter.fullname" . }}-modelroute-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "bodylog-exporter.fullname" . }}
+    namespace: {{ .Release.Namespace }}

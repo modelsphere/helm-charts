@@ -1,0 +1,13 @@
+apiVersion: v2
+name: openresty
+description: "Session-affinity router for LLM inference backends: pins a conversation to the backend that already holds its prefix cache, with active health checking, adaptive concurrency and full body logging"
+home: https://github.com/project-modelpilot/helm-charts
+sources:
+  - https://github.com/project-modelpilot/helm-charts
+  - https://github.com/project-modelpilot/llm-openresty
+type: application
+version: 0.2.0
+# The router image tag: values.image.tag is empty by default and falls back to
+# this, so a release moves both together.
+appVersion: "0.1.19"
+keywords: [openresty, routing, session-affinity, autoconfig]

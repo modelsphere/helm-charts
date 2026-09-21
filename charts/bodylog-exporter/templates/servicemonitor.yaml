@@ -1,0 +1,30 @@
+{{- if .Values.serviceMonitor.enabled }}
+# Scrape configuration for a cluster running the Prometheus operator, which owns
+# the ServiceMonitor CRD. The `release` label must match the Prometheus
+# resource's serviceMonitorSelector, or this is simply never picked up.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "bodylog-exporter.fullname" . }}
+  labels:
+    {{- include "bodylog-exporter.labels" . | nindent 4 }}
+    release: {{ .Values.serviceMonitor.releaseLabel }}
+spec:
+  {{- if .Values.serviceMonitor.jobName }}
+  jobLabel: jobName          # take the Prometheus job from the Service's jobName label
+  {{- end }}
+  namespaceSelector:
+    matchNames: [ {{ .Release.Namespace }} ]
+  selector:
+    matchLabels: {{- include "bodylog-exporter.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: exporter
+      path: /metrics
+      # Keep the service/route/backend/model labels the exporter attaches.
+      # Prometheus also injects a `service` label of its own, set to the name of
+      # the Service it scraped; without honorLabels that one wins and every
+      # series ends up labelled with this exporter instead of the model it
+      # describes, so aggregating by(service) collapses into a single bucket.
+      interval: {{ .Values.serviceMonitor.interval }}
+      honorLabels: true
+{{- end }}

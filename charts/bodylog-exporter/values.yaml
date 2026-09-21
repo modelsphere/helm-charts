@@ -1,0 +1,114 @@
+image:
+  # Public images on Docker Hub. Override to pull from your own registry --
+  # worth doing if your cluster has no egress.
+  repository: 4pdosc/bodylog-exporter
+  tag: ""                       # empty falls back to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+replicas: 1
+# One replica, and Recreate rather than RollingUpdate: two exporters running at
+# once would both be scraped, producing duplicate series for the same data.
+# Upgrading this chart rolls only this pod -- the listener is a separate chart
+# and keeps receiving and writing throughout.
+strategy: Recreate
+
+port: 9110                       # /metrics
+
+# Where the detail records come from: the listener's data directory. They live
+# on a node-local disk, which is why this pod must run on the same node as the
+# listener (see nodeSelector) and reads them READ-ONLY.
+data:
+  dir: /data/bodylog            # mount point in this container; must equal the listener's dataDir
+  hostPath: ""                  # the real directory on the node; must equal the listener's persistence.hostPath
+
+# The listener names its daily files from the local time zone and this exporter
+# looks for files by that same name, so the two MUST agree -- otherwise it tails
+# a file that does not exist and silently reads nothing. Keep this equal to the
+# listener chart's `timezone`.
+timezone: "UTC"
+dateTz: ""                      # empty follows `timezone`
+
+# When the listener rotates a day's records, the exporter fills the resulting gap
+# over the listener's HTTP API. This is a separate pod, so it goes through the
+# Service rather than localhost.
+listener:
+  service: bodylog              # listener Service name in this namespace; use bodylog.<ns>.svc across namespaces
+  httpPort: 9998
+
+# That gap-filling call carries the listener's token. By default this chart
+# reuses the Secret the listener chart already created, so the two cannot drift.
+secret:
+  existingSecret: bodylog       # reuse the listener's Secret; clear it and set create=true to make our own
+  create: false
+  token: ""                     # only when create=true: --set-string secret.token=<value>
+
+# Where the read offset is kept. On a node-local path by default, so a pod
+# restart or an upgrade resumes where it left off and the Prometheus counters do
+# not reset.
+#   hostPath empty -> a sibling of data.hostPath named <release>-ckpt
+#   hostPath set   -> that directory (must be writable; do not point it at the
+#                     read-only data mount)
+#   emptyDir=true  -> offsets are lost on every pod restart, so the day is re-read
+#                     and counters jump backwards. Testing only.
+checkpoint:
+  hostPath: ""
+  emptyDir: false
+
+# Besides tailing records, the exporter can poll the router's read-only status
+# endpoints (/<route>/_route_state, _tps_status, _ttft_status, _429_status) and
+# publish the live routing state -- bans, shedding thresholds, in-flight counts.
+# Empty url = tail only, no polling. Which routes to poll is discovered
+# dynamically by default; `routes` is the static escape hatch.
+openrestyPoll:
+  url: "http://openresty:8080"
+  routes: []
+  intervalMs: 15000
+# Route discovery lists ModelRoute custom resources, which needs the ServiceAccount
+# and ClusterRole in rbac.yaml. The CRD comes from the autoconfig operator; with
+# no operator installed, set openrestyPoll.routes instead.
+routeDiscovery:
+  enabled: true
+  apiGroup: routing.gpucluster.io
+  version: v1alpha1
+  plural: modelroutes
+  intervalSeconds: 30
+  openrestyService: ""          # with several routers, count only routes pointing at this one; empty = all
+
+# To report a service's desired replica count, the exporter walks ownerReferences
+# from a pod up to the top-level workload. Pods and the apps group are already in
+# rbac.yaml; if your top-level workload is a custom resource, add its API group
+# here or that lookup gets 403 and the desired-replicas metric is missing for it.
+desiredReplicas:
+  extraOwnerApiGroups:
+    - apiGroup: leaderworkerset.x-k8s.io
+      resources: [ "leaderworkersets" ]
+
+# Scrape configuration for a cluster running the Prometheus operator.
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  releaseLabel: kube-prometheus-stack
+  # Prometheus derives the `job` label from the Service name, which would put the
+  # listener's and the exporter's metrics under different jobs even though they
+  # describe the same data. Pinning a job name here keeps them together, so one
+  # query covers both. Empty = let the job fall back to the Service name.
+  jobName: "bodylog"
+
+service:
+  type: ClusterIP
+
+resources:
+  requests: { cpu: "50m",  memory: "64Mi" }
+  limits:   { cpu: "500m", memory: "256Mi" }
+
+probes:
+  enabled: true
+
+# Must be pinned to the node holding the listener's data disk. Setting
+# data.hostPath while leaving this empty fails the render with an explanation.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+nameOverride: ""
+fullnameOverride: ""
