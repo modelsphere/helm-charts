@@ -527,7 +527,21 @@ modelRoute:
     # Arbitrary tuning knobs, rendered verbatim into openresty's lua route table
     # (so a new knob needs no chart change). Common ones: ttft_limit_ms,
     # tps_limit_tps, adaptive_cc_min, default_max.
-    values: {}
+    #
+    # These merge with the defaults below rather than replacing them, so setting
+    # one knob does not silently drop the others.
+    values:
+      # Echo the chosen backend back to the caller as
+      #   X-Routed-Peer: <ip:port>|<GPU model>|<node>
+      # which is what turns "this request was slow" into "this request was slow
+      # on that machine" without having to correlate logs.
+      #
+      # openresty itself defaults this off, on the view that internal peers
+      # should not leak. On by default here because every route this chart is
+      # used for has wanted it, and re-stating it per route was pure repetition.
+      # Set it to "false" for any route whose callers should not see your
+      # topology -- anything reachable from outside the cluster, in particular.
+      expose_routed_peer: "true"
       # Setting tps_limit_tps opts into adaptive concurrency (AIMD): when the
       # decode rate falls below this, the concurrency ceiling shrinks.
       # tps_limit_tps: "30"
