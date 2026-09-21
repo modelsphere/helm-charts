@@ -22,6 +22,7 @@ appVersion: "1.0.0"
 dependencies:
   - name: cart
     version: 0.2.0
-    # 仓内单份来源:charts/cart。两个父 chart 共用它,不再各 vendor 一棵树。
+    # The single copy in this repo, shared by both parent charts rather than
+    # vendored into each of them.
     repository: "file://../cart"
     condition: cart.enabled

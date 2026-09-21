@@ -45,5 +45,10 @@ jobs:
           for d in charts/*/; do helm lint "$d"; done
 
       - uses: helm/chart-releaser-action@v1
+        with:
+          # A chart can change without its version moving -- a comment reworded,
+          # a doc fixed. Without this, cr fails the whole run trying to create a
+          # release that already exists.
+          skip_existing: true
         env:
           CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
