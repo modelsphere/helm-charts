@@ -5,7 +5,11 @@ apiVersion: v2
 # valid by default, and is also the values key a parent chart gates on
 # (cart.enabled).
 name: cart
-description: cache-aware-router(CART,k8s)——workers 由 autoconfig 从 ModelRoute 写进 config.yaml,reload sidecar 热更
+description: "Cache-aware router: routes each request to the replica that already holds the longest matching prompt prefix, while keeping load balanced"
+home: https://github.com/project-modelpilot/helm-charts
+sources:
+  - https://github.com/project-modelpilot/helm-charts
+  - https://github.com/project-modelpilot/cache_aware_router
 type: application
 version: 0.2.0
 appVersion: "v0.6.4"

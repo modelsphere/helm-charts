@@ -1,6 +1,9 @@
 apiVersion: v2
 name: sglang
-description: A Helm chart for deploying SGLang model
+description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection
+home: https://github.com/project-modelpilot/helm-charts
+sources:
+  - https://github.com/project-modelpilot/helm-charts
 type: application
 version: 0.7.0
 appVersion: "1.0.0"
