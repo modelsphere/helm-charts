@@ -9,5 +9,10 @@ type: application
 version: 0.2.0
 # The router image tag: values.image.tag is empty by default and falls back to
 # this, so a release moves both together.
-appVersion: "0.1.19"
+#
+# 0.1.20 is the current release: it is the newest openresty/v* tag upstream, the
+# version ChartMuseum serves, and the image published as
+# 4pdosc/llm-openresty:0.1.20. This said 0.1.19 because that was the newest
+# release when the chart was written, before 0.1.20 was cut.
+appVersion: "0.1.20"
 keywords: [openresty, routing, session-affinity, autoconfig]

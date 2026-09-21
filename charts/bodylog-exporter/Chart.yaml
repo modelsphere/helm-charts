@@ -9,5 +9,10 @@ type: application
 version: 0.2.0
 # The exporter image tag: values.image.tag is empty by default and falls back to
 # this, so a release moves both together.
-appVersion: "1.0.0"
+#
+# 0.2.6 is the actual release line -- it is the newest exporter/v* tag upstream,
+# the version ChartMuseum serves, and the image the clusters run. "1.0.0" was a
+# placeholder that an internal pipeline rewrote from the tag at publish time, so
+# it named a release that never existed, and no such image was ever built.
+appVersion: "0.2.6"
 keywords: [bodylog, exporter, prometheus, observability]
