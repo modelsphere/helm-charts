@@ -1,0 +1,90 @@
+image:
+  # Public images on Docker Hub. Override to pull from your own registry --
+  # worth doing if your cluster has no egress.
+  repository: 4pdosc/bodylog-listener
+  tag: ""                       # empty falls back to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+# Single instance on purpose: it owns the volume it writes to and aggregates
+# every frame in one place, so it cannot be scaled out.
+replicas: 1
+
+# frame = where the router pushes body-log frames (TCP)
+# http  = /summary, /metrics and /healthz (scrapers and probes)
+ports:
+  frame: 9999
+  http: 9998
+
+# Where records land: one directory per day, one file per hour, older days
+# rolled into a .tar.gz archive.
+dataDir: /data/bodylog
+
+# The listener names its daily files from the local time zone, and the exporter
+# looks for files by that same name. The two MUST agree, or the exporter tails a
+# file that does not exist and silently reads nothing. Containers default to UTC,
+# so set this explicitly to whatever your records should be dated by; the
+# exporter's DATE_TZ follows this value unless overridden.
+timezone: "UTC"
+
+# Persistence. Keep this on outside of testing -- with it off, a pod restart
+# loses the history.
+persistence:
+  enabled: true
+  # Non-empty puts the data on a NODE-LOCAL directory instead of a PVC, which is
+  # how you reuse a disk that already holds body-log data. When set:
+  #   - no PVC is created, and storageClassName/size/existingClaim are ignored;
+  #   - you MUST also set nodeSelector to pin the pod to the node holding that
+  #     disk, otherwise it may schedule elsewhere and create an empty directory
+  #     that looks exactly like lost history;
+  #   - there can be only one writer: stop any listener already writing to that
+  #     directory before taking it over.
+  hostPath: ""
+  storageClassName: ""          # empty uses the cluster's default StorageClass
+  accessMode: ReadWriteOnce
+  # Size this from your own traffic: roughly (compressed bytes written per day)
+  # x retention.keepDays, plus headroom. Full request and response bodies are
+  # large, so measure a day before committing to a number.
+  size: 2Ti
+  # existingClaim: ""           # set to reuse a PVC you created yourself
+
+# Retention is by AGE, not by size -- nothing here reacts to the disk filling up,
+# so the volume must be sized for the window you keep.
+retention:
+  keepDays: 60          # daily .tar.gz archives
+  detailsKeepDays: 365  # the per-request detail records the exporter reads
+
+# Token guarding /summary and /metrics. Whatever scrapes those endpoints must
+# send the same value, or it gets 401 and silently stops collecting.
+#   secret.create=true   -> this chart creates the Secret from `token`
+#   secret.create=false  -> reference an existingSecret with key BODYLOG_HTTP_TOKEN
+# An empty token disables authentication entirely (testing only).
+secret:
+  create: true
+  existingSecret: ""
+  token: ""                     # pass at install time: --set-string secret.token=<value>
+
+service:
+  type: ClusterIP               # frame port for the in-cluster router, http port for scrapers
+
+resources:
+  requests: { cpu: "250m", memory: "512Mi" }
+  # The memory limit is deliberately generous. Serving /metrics runs queries over
+  # the stored records, archiving rewrites whole days, and a router rollout can
+  # replay a backlog of frames all at once -- the three can coincide. A limit in
+  # the low gigabytes turns that spike into an OOM kill, and because the backlog
+  # survives the restart the pod is killed again as soon as it catches up: a
+  # crash loop that looks like a bug in the listener but is simply too small a
+  # ceiling. Lower it only if you have measured your own peak.
+  limits:   { cpu: "2",    memory: "64Gi" }
+
+probes:
+  enabled: true                 # /healthz on the http port, always unauthenticated
+
+# Recreate, not RollingUpdate: the volume is ReadWriteOnce and a second pod would
+# block trying to attach it.
+strategy: Recreate
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}

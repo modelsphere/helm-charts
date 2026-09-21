@@ -1,0 +1,36 @@
+The body-log listener is deployed: {{ include "bodylog.fullname" . }} (namespace {{ .Release.Namespace }})
+
+Wiring it up:
+
+  1) Router -> frames. In the openresty chart, set:
+
+       bodylog.host = {{ include "bodylog.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+       bodylog.port = {{ .Values.ports.frame }}
+
+     It must be the fully qualified name. nginx's cosocket resolver does not
+     apply search domains, so a bare Service name fails to resolve and the frames
+     are dropped silently, with nothing failing on the request path.
+
+  2) Metrics -> whatever scrapes you use. Point it at:
+
+       http://{{ include "bodylog.fullname" . }}.{{ .Release.Namespace }}:{{ .Values.ports.http }}/summary
+
+     sending the same token as secret.token. To publish Prometheus metrics from
+     these records, install the bodylog-exporter chart on the same node.
+
+Check it is alive:
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "bodylog.fullname" . }} -- \
+    wget -qO- http://127.0.0.1:{{ .Values.ports.http }}/healthz
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "bodylog.fullname" . }} -- \
+    wget -qO- 'http://127.0.0.1:{{ .Values.ports.http }}/summary?minutes=5'
+{{- if not .Values.persistence.enabled }}
+
+WARNING: persistence.enabled=false -- records go to an emptyDir and a pod restart
+loses them. Turn persistence on for anything you intend to keep.
+{{- end }}
+{{- if and .Values.secret.create (not .Values.secret.token) }}
+
+WARNING: secret.token is empty, so /summary and /metrics are unauthenticated.
+Set it with --set-string secret.token=<value>, matching whatever scrapes them.
+{{- end }}

@@ -1,0 +1,153 @@
+image:
+  # Public images on Docker Hub. Override this (and the two sidecars below) to
+  # pull from your own registry -- worth doing if your cluster has no egress.
+  repository: 4pdosc/llm-openresty
+  tag: ""          # empty falls back to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+replicas: 2                # master/standby: two replicas, only the leader takes traffic (see ha)
+
+adminPort: 8090            # fixed admin/health port baked into the image (/healthz); used by probes and ha-gate
+
+# master/standby: the ha-gate sidecar elects a leader, and only the replica
+# holding the Lease labels itself active -- so only it is in the Service's
+# endpoints. The router's state (connection counts, adaptive concurrency, the
+# health-check ban list) lives in one pod's shared memory, so an active/active
+# pair would split that state in half.
+ha:
+  enabled: true
+  # Built from the autoconfig project, not from this router, so its version
+  # tracks autoconfig's releases rather than this chart's appVersion.
+  image: 4pdosc/autoconfig-hagate:0.3.31
+  port: 8081
+  # Watches the fixed admin port rather than a route port, which comes and goes
+  # with configuration: nginx answering on 8090 is what "really alive" means.
+  appTcp: "127.0.0.1:8090"
+
+probes:
+  enabled: true            # one switch for startup + liveness + readiness (a Helm convention, not k8s syntax)
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1          # keep one replica during evictions and rollouts
+
+# ── Graceful shutdown (draining in-flight streams on rollout or eviction) ──────
+# nginx's signals are counter-intuitive: SIGTERM is a *fast* shutdown that cuts
+# in-flight requests, SIGQUIT is the graceful one. The image sets
+# STOPSIGNAL SIGQUIT, so stopping a pod makes nginx stop accepting and let
+# in-flight streams finish. Two settings decide how well that works:
+#
+# terminationGracePeriodSeconds is the hard cutoff -- at that point kubelet sends
+# SIGKILL and any stream still running dies. An LLM response can stream for many
+# minutes, so the default 30s would cut them. The cost of a large value is only
+# that a terminating pod lingers.
+terminationGracePeriodSeconds: 3600
+# A pod is removed from the Service's endpoints asynchronously, and that removal
+# takes a moment to reach every node. Sleeping first lets the removal propagate
+# before nginx closes its listener, so no new connection arrives after it stops
+# accepting. 0 disables the hook.
+preStop:
+  sleepSeconds: 5
+
+# Bring up a new pod and let it become ready before draining an old one, so a
+# rollout never dips below the desired replica count. Set the whole block to {}
+# to use the Kubernetes defaults (25%/25%).
+updateStrategy:
+  maxSurge: 1
+  maxUnavailable: 0
+
+# Per-route configs live in a ConfigMap mounted at conf.d/routes/. This chart
+# creates it with initialRoutes as its starting content; after that anything can
+# edit it -- the autoconfig operator if you run one, or kubectl edit if you do
+# not. Helm's three-way merge leaves keys added out of band alone as long as the
+# template itself does not change.
+configMapName: openresty-conf
+initialRoutes: {}          # session_route_<route>.conf entries as filename: content
+
+# The reload sidecar watches the mounted config and the key Secret, and sends
+# SIGHUP to the nginx master when either changes -- no restart, no dropped
+# streams. Rotating API keys needs the second watch path, which arrived in
+# autoconfig 0.3.46.
+reload:
+  enabled: true
+  image: 4pdosc/autoconfig-reload:0.3.46
+  process: "nginx: master"
+
+service:
+  type: ClusterIP
+  # One external port. 8080 dispatches on the path prefix (/<route>/...), so
+  # adding a model never means allocating a port or touching this list.
+  ports:
+    - { name: dispatch, port: 8080 }
+    - { name: health,   port: 8090 }
+
+# Sized for a router running many nginx workers. Requests sit below limits to
+# keep scheduling flexible; raise requests to equal limits for Guaranteed QoS.
+resources:
+  requests: { cpu: "2",  memory: 2Gi }
+  limits:   { cpu: "20", memory: 32Gi }
+
+podAnnotations: {}
+
+# Extra pod labels. These deliberately do NOT go into the selector: a
+# Deployment's selector is immutable, so changing it fails the upgrade. Useful
+# when one external Service should select pods from several releases at once.
+podLabels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+nameOverride: ""
+fullnameOverride: ""
+
+# ── API keys (entry-point authentication) ────────────────────────────
+# Keys stay out of the image and out of git; this chart mounts them from a Secret
+# as a file at /etc/openresty/api-keys/keys, which lua/api_keys.lua reads.
+#
+# Mounted as a file, not injected as an environment variable, so that keys can be
+# ROTATED WITHOUT RESTARTING the nginx master: nginx reads `env` declarations only
+# at master startup and `-s reload` does not re-read them, but a reload does
+# re-execute init_by_lua and re-read files. Restarting the master would drop every
+# in-flight stream, which for LLM traffic can mean minutes-long responses.
+# The reload sidecar watches the Secret mount as a second --watch path, so a key
+# change triggers the reload on its own.
+#
+# Format `key1:owner1,key2:owner2` -- the owner label records who holds the key.
+# Supporting several keys is what makes rotation possible: issue the new key
+# alongside the old one, move callers over, then retire the old one. A single
+# key would turn every rotation into an outage.
+#
+# Three ways to use it (mirrors bodylog):
+#   1) secret.create=true + secret.keys=xxx    -> this chart creates the Secret
+#                                                 (simplest for test/single-host)
+#   2) secret.create=false + existingSecret=N  -> reuse a Secret created out of
+#                                                 band (recommended in production,
+#                                                 keys never reach git)
+#   3) neither                                 -> authentication OFF
+#
+# Option 3 is a deliberate fail-open: openresty is the public entry point, and a
+# misconfigured Secret returning 401 for the whole site is worse than a brief
+# window without auth. It is not silent -- the engine logs an error and
+# /_health_status reports _meta.api_keys_configured=false for alerting.
+secret:
+  create: false
+  keys: ""                   # only used when create=true, e.g. "sk-xxx:admin,sk-yyy:teamB"
+existingSecret: ""           # takes precedence over create; both empty = no authentication
+# The entry inside the Secret must be named `keys`: the Secret is mounted as a
+# directory, so each entry name becomes a file name under /etc/openresty/api-keys.
+# (A whole-volume mount, never subPath -- subPath copies the file once and stops
+# following the ..data symlink swap, so rotation would silently stop working.)
+
+# Where to ship captured request/response bodies (the bodylog chart). Empty means
+# body logging is OFF, and there is deliberately no default address: a default
+# would make a deployment that never configured bodylog send full prompts and
+# completions to a host it did not choose. That is a data-exfiltration shape, not
+# a convenience.
+#
+# When you do set it, it MUST be a fully qualified name
+# (bodylog.<namespace>.svc.cluster.local). nginx's cosocket resolver does not
+# apply search domains, so a bare Service name silently fails to resolve and the
+# frames are dropped with no error on the request path.
+bodylog:
+  host: ""
+  port: 9999

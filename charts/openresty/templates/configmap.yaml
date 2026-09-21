@@ -1,0 +1,14 @@
+# Per-route configs, mounted at conf.d/routes/. This chart seeds the ConfigMap
+# from initialRoutes; after that it is edited in place -- by hand, or by an
+# operator if you run one. Helm's three-way merge leaves entries added out of
+# band alone as long as this template does not change.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMapName }}
+  labels: {{- include "openresty.labels" . | nindent 4 }}
+data:
+{{- range $f, $c := .Values.initialRoutes }}
+  {{ $f }}: |
+{{ $c | indent 4 }}
+{{- end }}

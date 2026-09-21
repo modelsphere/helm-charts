@@ -1,0 +1,38 @@
+openresty is deployed ({{ include "openresty.fullname" . }}).
+
+  Image  : {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+  Routes : ConfigMap {{ .Values.configMapName }}, mounted at conf.d/routes/
+{{- if .Values.reload.enabled }}
+  Reload : sidecar watches that mount and SIGHUPs the nginx master -- no restart
+{{- end }}
+
+Adding or changing a route means editing that ConfigMap. Either way works, and
+they do not conflict:
+
+  - By hand:
+      kubectl -n {{ .Release.Namespace }} edit cm {{ .Values.configMapName }}
+    adding or removing session_route_<route>.conf entries.
+
+  - With an operator: if you run the autoconfig operator, point a ModelRoute at
+    this ConfigMap (openresty.outputConfigMap={{ .Values.configMapName }}) and it
+    maintains those entries for you.
+
+A helm upgrade will not clobber entries added by either route, as long as this
+chart's template itself has not changed. A ConfigMap edit takes up to about a
+minute to reach the pod, after which the reload sidecar picks it up.
+
+Check the rendered configuration:
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "openresty.fullname" . }} -c openresty -- \
+    /usr/local/openresty/bin/openresty -t
+{{- if not .Values.bodylog.host }}
+
+Body logging is OFF (bodylog.host is empty). Set it to the fully qualified name
+of a listener -- bodylog.<namespace>.svc.cluster.local -- to capture request and
+response bodies. A bare Service name will not resolve.
+{{- end }}
+{{- if and (not .Values.existingSecret) (not .Values.secret.create) }}
+
+WARNING: no API keys are configured, so this router accepts unauthenticated
+requests. This is the deliberate fail-open described in values.yaml; set
+existingSecret or secret.create to turn authentication on.
+{{- end }}

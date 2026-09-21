@@ -1,0 +1,95 @@
+{{- if and .Values.persistence.hostPath (empty .Values.nodeSelector) }}
+{{- fail "\n[bodylog] persistence.hostPath is set but nodeSelector is empty. The hostPath uses DirectoryOrCreate, so if this pod schedules onto any other node it will silently create an empty directory there -- which looks exactly like the history having been lost. Pin the pod to the node holding the data disk, e.g. --set nodeSelector.\"kubernetes\\.io/hostname\"=<node>" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "bodylog.fullname" . }}
+  labels: {{- include "bodylog.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  strategy:
+    type: {{ .Values.strategy }}   # Recreate: the volume is ReadWriteOnce, so two pods cannot overlap
+  selector:
+    matchLabels: {{- include "bodylog.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "bodylog.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      # Stated explicitly rather than omitted. The listener never calls the
+      # Kubernetes API, so the default ServiceAccount is all it needs -- but
+      # leaving the field out is not the same as setting it: on an upgrade,
+      # Helm's three-way merge would keep whatever value is already live, and a
+      # stale reference to a ServiceAccount that no longer exists fails pod
+      # creation and wedges the rollout. Naming it makes the upgrade explicit.
+      serviceAccountName: default
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: bodylog
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - { name: BODYLOG_HOST,      value: "0.0.0.0" }
+            - { name: BODYLOG_PORT,      value: "{{ .Values.ports.frame }}" }
+            - { name: BODYLOG_HTTP_HOST, value: "0.0.0.0" }
+            - { name: BODYLOG_HTTP_PORT, value: "{{ .Values.ports.http }}" }
+            - { name: BODYLOG_DIR,       value: "{{ .Values.dataDir }}" }
+            # Daily files are named from the local time zone; the exporter's
+            # DATE_TZ must match this or it tails a file that does not exist.
+            - { name: TZ,                value: "{{ .Values.timezone }}" }
+            - { name: BODYLOG_KEEP_DAYS,         value: "{{ .Values.retention.keepDays }}" }
+            - { name: BODYLOG_DETAILS_KEEP_DAYS, value: "{{ .Values.retention.detailsKeepDays }}" }
+            - name: BODYLOG_HTTP_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ include "bodylog.secretName" . }}, key: BODYLOG_HTTP_TOKEN }
+          ports:
+            - { name: frame, containerPort: {{ .Values.ports.frame }} }   # frames from the router (TCP)
+            - { name: http,  containerPort: {{ .Values.ports.http }} }    # /summary, /metrics, /healthz
+          {{- if .Values.probes.enabled }}
+          startupProbe:                    # no liveness/readiness verdict until it has started
+            httpGet: { path: /healthz, port: {{ .Values.ports.http }} }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /healthz, port: {{ .Values.ports.http }} }
+            periodSeconds: 15
+            # The default probe timeout is 1s. Under load -- serving a /metrics
+            # query, archiving a day, absorbing a burst of frames -- /healthz can
+            # answer a beat late, and a 1s timeout then kills a listener that is
+            # merely busy, at the worst possible moment. Ten seconds, and six
+            # consecutive failures (90s) before a restart.
+            timeoutSeconds: 10
+            failureThreshold: 6
+          readinessProbe:                  # /healthz is always unauthenticated
+            httpGet: { path: /healthz, port: {{ .Values.ports.http }} }
+            periodSeconds: 10
+            # Same reasoning: dropping a busy listener out of the Service stops
+            # the router from delivering frames, which makes the backlog worse.
+            timeoutSeconds: 10
+            failureThreshold: 3
+          {{- end }}
+          {{- with .Values.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - { name: data, mountPath: {{ .Values.dataDir }} }
+      volumes:
+        - name: data
+        {{- if .Values.persistence.hostPath }}
+          hostPath: { path: {{ .Values.persistence.hostPath | quote }}, type: DirectoryOrCreate }  # node-local disk; requires nodeSelector
+        {{- else if .Values.persistence.enabled }}
+          persistentVolumeClaim: { claimName: {{ include "bodylog.pvcName" . }} }
+        {{- else }}
+          emptyDir: {}          # not persistent: a pod restart loses the history (testing only)
+        {{- end }}
