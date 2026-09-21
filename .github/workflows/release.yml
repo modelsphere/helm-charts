@@ -1,0 +1,49 @@
+# Publishes every chart whose version changed to the Helm repository served by
+# GitHub Pages at https://project-modelpilot.github.io/helm-charts
+#
+# chart-releaser packages each chart, attaches the .tgz to a GitHub Release, and
+# rewrites index.yaml on the gh-pages branch. It uses the built-in GITHUB_TOKEN,
+# so there is no secret to rotate.
+name: release-charts
+
+on:
+  push:
+    branches: [main]
+    paths: ['charts/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write     # create releases, push to gh-pages
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # chart-releaser needs full history to tell what changed
+
+      - name: Configure git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - uses: azure/setup-helm@v4
+
+      # sglang and vllm depend on charts/cart through file://../cart. That is a
+      # local path, so nothing is downloaded -- but the dependency still has to be
+      # materialised into charts/<parent>/charts/ before `helm package` will run.
+      - name: Resolve local chart dependencies
+        run: |
+          for d in charts/*/; do
+            grep -q '^dependencies:' "$d/Chart.yaml" 2>/dev/null || continue
+            helm dependency update "$d"
+          done
+
+      - name: Lint
+        run: |
+          for d in charts/*/; do helm lint "$d"; done
+
+      - uses: helm/chart-releaser-action@v1
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}

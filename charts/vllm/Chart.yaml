@@ -1,0 +1,24 @@
+apiVersion: v2
+name: vllm
+description: A Helm chart for deploying a minimal vLLM model
+type: application
+version: 0.4.0
+appVersion: "1.0.0"
+
+# CART is vendored under charts/cart -- already present, so no `helm dependency
+# update` is needed and `helm install ./charts/vllm` works offline. The entry
+# exists only to carry the condition: without it Helm renders a vendored
+# subchart unconditionally.
+#
+# CART belongs to exactly one model (prefix affinity only means anything within
+# a single model), which is why it ships inside the chart that owns the model
+# rather than being installed alongside it.
+#
+# charts/cart is GENERATED from the pin below by ./hack/vendor-cart.sh -- bump
+# the version and re-run it; never edit charts/cart by hand.
+dependencies:
+  - name: cart
+    version: 0.2.0
+    # 仓内单份来源:charts/cart。两个父 chart 共用它,不再各 vendor 一棵树。
+    repository: "file://../cart"
+    condition: cart.enabled

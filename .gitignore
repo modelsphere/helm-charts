@@ -1,0 +1,4 @@
+# helm dependency update 的产物(由 file://../cart 生成),不入库
+charts/*/charts/
+charts/*/Chart.lock
+*.tgz

@@ -1,0 +1,867 @@
+# override the name of most resources in current chart, except for:
+#
+# - LWS servce name goes to '<fullnameOverride>-leader', since the lws StatefulSet create the '<fullnameOverride>' svc
+fullnameOverride: ""
+
+# global serviceId used for modelroute, sloRequirement and scaler (with custom provider)
+# default to sglang.fullname if not set
+# each ussage is allowed to override this
+serviceId: ""
+
+# Only used when scaler.enabled is false. With the scaler on, the chart omits
+# spec.replicas entirely so the operator can own it (see deployment.yaml), and
+# the starting count comes from scaler.minReplicas instead.
+replicaCount: 1
+
+# Multi-node: one model instance spread across several nodes, as a
+# LeaderWorkerSet (leaderworkerset.x-k8s.io/v1) instead of a Deployment. The
+# GROUP (lws.size pods: one leader + workers) is the unit that loads the model,
+# scales and restarts. Requires the LWS controller.
+#
+# The rest of the chart carries over: the Service narrows to role: leader (SGLang
+# serves HTTP on rank 0 only), scaler.targetRef follows to the LWS where one
+# replica is a whole group, ModelRoute / CART / ServiceMonitor are unchanged.
+# --nnodes, --node-rank and --dist-init-addr are derived from the group;
+# --tp / --pp-size go in extraArgs.
+#
+# STARTUP of one group
+#   1. leader pod created                     [startupPolicy]
+#   2. worker pods created, in parallel
+#   3. every pod runs model-check             [modelCheck]
+#   4. workers block on the leader's port     [waitForLeader, distPort]
+#   5. ranks rendezvous, load weights, form the NCCL group
+#   6. leader binds service.port -> the group is serving
+#
+# SHUTDOWN of one group (scale-down, rolling update, or any member restarting
+# under RecreateGroupOnPodRestart). The two grace periods run in SERIES:
+#   1. leader pod deleted FIRST               [terminationGracePeriodSeconds]
+#      a. endpoint removed from the Service
+#      b. preStop drains until idle           [endpointSyncSeconds, drainSeconds]
+#         (gives up early if /metrics stays unreadable: nothing to drain)
+#      c. preStop SIGTERMs PID 1, waits, kills its children if it is stuck
+#                                             [leaderPreStopKill / preStopKill,
+#                                              shutdownReserveSeconds]
+#      d. kubelet SIGKILL at the grace deadline -- backstop
+#   2. worker StatefulSet GC'd (its owner is the leader POD)
+#   3. worker pods                            [workerTerminationGracePeriodSeconds]
+#   4. replacement group starts -- same pod names, so only now
+#
+# Things that bite, none of them visible from the field names:
+#   - LeaderCreated promises the leader POD exists, not that anything is
+#     listening. LeaderReady would deadlock: the port binds only once the workers
+#     have joined.
+#   - The leader's patience at the rendezvous is the engine's --dist-timeout
+#     (torch default 600s), NOT the startupProbe budget. Set too low, the leader
+#     exits while waitForLeader is still waiting for it, and the group restarts
+#     into the same race.
+#   - Workers carry no probes. READY 1/1 means "container running", not "model
+#     loaded" -- the group's real readiness is the leader's.
+#   - SIGKILL to PID 1 from inside its own PID namespace is silently dropped
+#     (kill(2) still returns 0). SIGTERM gets through because SGLang installs a
+#     handler, and PID 1's children are killable -- which is what (1c) uses.
+#   - A process wedged in the GPU driver (D state) ignores even the kubelet's
+#     SIGKILL: the pod sits in Terminating holding its GPUs until the node is
+#     dealt with. No chart setting reaches that.
+
+lws:
+  enabled: false
+  size: 2                                   # pods per group, leader included = --nnodes
+  replicas: 1                               # GROUPS, not pods; omitted when the scaler owns it
+  distPort: 29500                           # rendezvous port, pod-to-pod inside the group
+  startupPolicy: LeaderCreated
+  restartPolicy: RecreateGroupOnPodRestart
+  subdomainPolicy: Shared                   # Shared | UniquePerReplica
+  waitForLeader: true
+  workerTerminationGracePeriodSeconds: 60   # empty = same as the leader's
+  leaderPreStopKill: true
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxSurge: 1
+      maxUnavailable: 0
+
+image:
+  repository: "lmsysorg/sglang"
+  tag: "latest"
+
+model:
+  # The Hugging Face repo ID
+  name: "facebook/opt-125m"
+  # Where the models are cached on the host node
+  localPath: "/mnt/disk0/models/facebook/opt-125m"
+  # Where localPath is mounted inside the container. Feeds both the volumeMount
+  # and --model-path, so the two cannot drift apart.
+  mountPath: "/models"
+  # `Directory` makes the kubelet refuse to start the pod when localPath does not
+  # exist on the node, surfacing a FailedMount event immediately.
+  # `DirectoryOrCreate` would instead create an empty directory and hand it to
+  # the engine, which then fails minutes later with an error pointing at the
+  # model rather than at the mount.
+  hostPathType: Directory
+  # Leave empty to omit --context-length entirely and let SGLang use the model's
+  # own. Only pin it when you really mean to cap the context.
+  contextLength: "1024"
+  # Empty or "0" leaves nvidia.com/gpu off the pod entirely rather than
+  # requesting zero of it: the two schedule alike, but device plugins, GPU
+  # webhooks and quota all key off the key being there.
+  gpus: "1"
+
+# Init container that checks the mounted model directory before the engine gets
+# a chance to start. hostPathType: Directory already catches a missing path; this
+# catches the cases it cannot see -- an empty directory, or a half-synced one
+# where the weights never finished copying. Failing here costs seconds and says
+# exactly what is wrong, instead of a multi-minute load ending in a stack trace.
+#
+# It reuses the engine image, so nothing extra has to be pulled or mirrored into
+# a private registry, and it needs no GPU.
+modelCheck:
+  enabled: true
+  # Each glob must match at least one entry directly under model.mountPath.
+  # Empty the list to only assert the directory is non-empty.
+  requiredGlobs:
+    - "config.json"
+
+# Extra SGLang server flags, appended verbatim to the command line (e.g.
+# --tp-size=2, --mem-fraction-static=0.83). The chart already emits
+# --model-path, --served-model-name, --host, --port and --enable-metrics, so do
+# not repeat those here.
+#
+# Rejected under commandOverride below, which leaves no command line to append to.
+extraArgs: []
+
+# The container's command, replacing the SGLang line the chart builds. Unset
+# (default) leaves that alone; defined takes it over completely -- no
+# --model-path, no --enable-metrics, no LWS rank flags, and extraArgs is
+# rejected. `[]` means the image's own ENTRYPOINT.
+#
+# For running something that is not SGLang -- a mock server on service.port, to
+# exercise routing and scaling without GPUs or weights -- see values-mock.yaml,
+# which is a working example of this plus the settings that go with it.
+#
+# Use a values file for the `[]` form: `--set commandOverride={}` yields [""],
+# which no container can exec.
+commandOverride:
+
+service:
+  type: ClusterIP
+  # The inference and /metrics port. Threaded through the container port, the
+  # Service, the probes, SGLang's --port flag and the preStop drain URL, so
+  # changing it here is enough. SGLang's own default is 30000.
+  port: 30000
+
+# Makes /health a cheap status check instead of a real inference request.
+#
+# SGLang ships this true, which routes /health through the same generate-a-token
+# handler as /health_generate: it sleeps 1s before its first check and waits up to
+# SGLANG_HEALTH_CHECK_TIMEOUT (20s), so it can never answer in under a second --
+# against a probe timeoutSeconds that defaults to 1, that fails forever. Measured
+# on one pod: /health 3ms with this false, /health_generate 1.00s.
+#
+# This only shapes /health. /health_generate always runs the deep check regardless, and
+# readinessProbe below points at it -- which is what keeps the deep handler exercised every
+# periodSeconds, both to notice a wedged detokenizer and to give logHang something to match.
+# Flipping this to true would drag every other /health caller (CART polls it every ~5s) from
+# 3ms to 1s+ for no added coverage.
+healthEndpointGeneration: false
+
+# Probes. `port: http` refers to the container port by name, so it follows
+# service.port automatically.
+#
+# The startupProbe is what makes a livenessProbe safe here: until it succeeds
+# the kubelet does not run liveness or readiness at all, so loading a large
+# model cannot be mistaken for a hang and restarted. Its
+# failureThreshold x periodSeconds is the whole startup budget -- raise
+# failureThreshold for big models (a 30B+ model can need 10-20 minutes).
+#
+# Always set timeoutSeconds. It defaults to 1 second, which is too tight for a
+# server that is busy loading weights even when the endpoint itself is cheap.
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+# Readiness uses the DEEP endpoint: /v1/models and the shallow /health answer from cached
+# frontend state and never touch the scheduler, so they return 200 straight through a wedged
+# detokenizer (measured: 158s Ready and still taking traffic). /health_generate covers the
+# whole pipeline; switching cut traffic removal from "never" to 36s.
+# timeoutSeconds 5: measured 1.00s under 12 concurrent requests, near-zero variance (the
+# scheduler drops health checks while busy). The k8s default of 1s would fail forever.
+# startupProbe stays on /v1/models -- a more precise ready signal during load.
+readinessProbe:
+  httpGet:
+    path: /health_generate
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+# ⚠️ ONLY used when hangWatcher.enabled is false. With the sidecar on (the default)
+# the chart writes its own livenessProbe pointing at /healthz and ignores this block
+# entirely -- path, port and the numbers below included, so the "90s" is not what
+# actually runs (hangWatcher.livenessProbe governs that).
+#
+# The deep endpoint is deliberate: /health never touches the scheduler, so a wedged
+# scheduler would still answer 200. /health_generate returns as soon as ANY scheduler
+# response is seen, so it stays cheap under load. timeoutSeconds must stay above
+# SGLang's own HEALTH_CHECK_TIMEOUT (20s) or the kubelet hangs up first.
+livenessProbe:
+  httpGet:
+    path: /health_generate
+    port: http
+  periodSeconds: 30
+  timeoutSeconds: 25
+  # 30s x 3 = 90s wedged before a restart.
+  failureThreshold: 3
+
+# Hang-detection sidecar: reads this pod's SGLang /metrics, serves /healthz
+# (200/503), and takes over the engine's livenessProbe (503 -> kubelet restarts
+# the engine). Reports only -- no k8s API / RBAC. Deeper than /health_generate:
+# watches token_progress stalling, not just "can emit one token". startupProbe
+# still gates model load, so a slow start is never mistaken for a hang.
+hangWatcher:
+  enabled: true              # default on; false = fall back to the engine's own livenessProbe, drop the sidecar (e.g. image unreachable)
+  image:
+    repository: "modelpilot/hang-watcher"
+    # >= 0.1.22 is required by the livenessProbe below (5s x 2): 10s is shorter than
+    # one probe timeout plus one poll, so a sidecar that probes only once -- at the
+    # moment stallSec expires -- lets a single slow probe kill a healthy engine.
+    # 0.1.22 probes on every stalled poll and needs consecutive failures spanning
+    # stallSec, with the verdict still landing at stallSec.
+    tag: "0.1.22"
+  port: 9090                 # /healthz port (just needs to differ from service.port)
+  # Thresholds -> ConfigMap the sidecar hot-reloads (helm upgrade retunes, no pod restart).
+  config:
+    # Adds 0~pollIntervalSec of jitter to detection (stallSec expires, then we wait for the
+    # next poll). 15 -> 5 narrowed the measured window from 50-65s to 35-40s; a loopback
+    # /metrics scrape every 5s costs nothing.
+    pollIntervalSec: 5
+    # How long token_progress may freeze before the sidecar starts asking questions.
+    # 180 -> 30, and ONLY safe together with sidecar >= 0.1.18: it counts per-iteration
+    # counters (realtime_tokens_total, cuda_graph_passes_total), whereas the older
+    # finish-only ones froze for a whole long request and got such a pod killed.
+    # With the active probe behind it this is "when to start asking", not "when to
+    # declare dead". Headroom: one chunked-prefill forward is 1-3s. Raise it if your
+    # deployment has stop-the-world operations (weight hot-reload).
+    stallSec: 30
+    metricsTimeoutSec: 10
+    # Once token_progress has frozen past stallSec, probe the engine: 2xx = alive,
+    # timeout/5xx = confirmed hang. On by default because the passive path cannot tell
+    # "genuinely idle" from "scheduler wedged" -- running is 0 in both.
+    #
+    # GET /health_generate, not POST /v1/completions: both reach the scheduler, but only
+    # this one is bounded (returns on ANY scheduler response, gives up at SGLang's own 20s
+    # with a 503). /v1/completions queues under load with no upper bound, which is why its
+    # timeout had to be 60s -- dead weight on every detection.
+    activeProbeEnabled: true
+    activeProbePath: /health_generate
+    activeProbeMethod: GET
+    activeProbeBody: ""
+    # 5s, well under the engine's own 20s: we time out first, so the verdict is "no answer"
+    # rather than the engine's explicit 503 -- weaker, still bounded, and it was the largest
+    # fixed cost after stallSec. Safe because the probe only fires after 30s of frozen
+    # progress: a healthy busy engine never gets here, an idle one answers within the
+    # handler's 1s tick. Narrows tolerance for stop-the-world stalls from ~55s to ~35s.
+    activeProbeTimeoutSec: 5
+    # A second, independent signal: the engine complaining in its own log. Frozen for
+    # logHang.stallSec AND a matching line within windowSec -> hang, without waiting out the
+    # full stallSec. It ORs with the normal path, so it can only shorten a restart. It also
+    # covers wedged-idle, where running=0 hides a dead scheduler from the passive path.
+    # Passive -- no extra request: the sidecar tails this pod's sglang log via a read-only
+    # /var/log/pods mount (path from the downward API, so never a neighbour's). Rotation,
+    # truncation and partial lines handled; seeks to EOF on start; an unreadable log just
+    # skips the fast path.
+    # On by default ONLY because readinessProbe drives /health_generate -- that is what makes
+    # the engine emit the line early enough to matter. Measured: 35s vs 42s.
+    logHang:
+      enabled: true
+      # Frozen this long + a log hit = hang. MUST stay below the stallSec above -- firing
+      # earlier is the whole point, and the chart fails at render time otherwise (the schema
+      # only checks minimum: 1, so two equal values would look valid and silently do nothing).
+      stallSec: 15
+      windowSec: 120         # how recently the sidecar must have READ a matching line (wall clock at poll time, not the timestamp inside the line)
+      # Regexes (RE2) to look for. Empty = the sidecar's built-in SGLang detokenizer-timeout
+      # pattern; a non-empty list REPLACES it, so name it explicitly to keep it. The chart
+      # joins entries into one alternation, each wrapped in (?:...) so a `|` inside an entry
+      # cannot bleed into the next. Example: ["couldn't get a response from detokenizer", "Watchdog timeout"]
+      patterns: []
+  # Tunes the ENGINE container's livenessProbe (which points at this sidecar's /healthz), not
+  # a probe on the sidecar -- the sidecar has no liveness. 2 x 5s = 10s of 503 before restart.
+  # Was 15s x 3: that window alone cost more than the probe and stallSec combined, and probing
+  # a loopback endpoint every 5s costs nothing. failureThreshold 2 rather than 3 because a
+  # sidecar that really goes away is gone far longer than either window anyway.
+  livenessProbe:
+    periodSeconds: 5
+    failureThreshold: 2
+  # Readiness on the SIDECAR ITSELF: a pod is an endpoint only while every container is ready,
+  # so a hang verdict drops it out of the Service without touching the engine's own probes.
+  # More aggressive (2 x 5s) than liveness because a wrong readiness only moves traffic.
+  # Startup is unaffected (healthy until the first scrape). Set to {} to drop it.
+  readinessProbe:
+    periodSeconds: 5
+    failureThreshold: 2
+  resources:
+    requests: { cpu: "10m", memory: "16Mi" }
+    limits:   { cpu: "100m", memory: "64Mi" }
+
+# Graceful shutdown: let a pod finish its work before it is deleted.
+#
+# SGLang differs from vLLM here in an important way. It ALREADY drains on
+# SIGTERM, with no flag to turn on: its sigterm handler sets gracefully_exit and
+# a watchdog waits for in-flight requests before shutting the schedulers down.
+# But that wait has NO timeout of its own -- it loops until the request count
+# reaches zero. terminationGracePeriodSeconds is therefore not a budget SGLang
+# stays inside, it is the deadline that CUTS SGLang off: whatever is still
+# running when it expires is SIGKILLed.
+#
+# So size the grace period past your longest generation, not just past the
+# numbers below.
+terminationGracePeriodSeconds: 60
+lifecycle:
+  preStop:
+    enabled: true
+    # Stage 1a: keep serving while the cluster takes this pod out of rotation,
+    # so no new requests are sent here.
+    #
+    # This always waits the full time. Kubernetes starts removing the pod from
+    # the EndpointSlice and runs this hook AT THE SAME TIME, not one after the
+    # other, and the pod has no way to check whether that removal finished yet.
+    #
+    # Set it to however long whatever routes traffic here needs to notice.
+    # Roughly ~1s for an in-cluster ClusterIP Service, ~10s if an external load
+    # balancer has to converge; 5 is a safe middle default.
+    endpointSyncSeconds: 5
+    # Stage 1b: how long to wait, at most, for requests already accepted to
+    # finish. The hook watches SGLang's own metrics and moves on as soon as the
+    # server goes idle, so a quiet pod shuts down in about endpointSyncSeconds
+    # instead of always waiting this long.
+    #
+    # Doing the draining HERE, where it is bounded, is what keeps the unbounded
+    # post-SIGTERM drain from running into the SIGKILL deadline.
+    drainSeconds: 30
+    # How often to re-check whether SGLang has gone idle.
+    pollIntervalSeconds: 2
+  # Stage 2: time reserved for SGLang's own shutdown after SIGTERM -- headroom
+  # kept free in the grace period, and the chart checks it fits. Under
+  # lws.leaderPreStopKill it is also how long the hook waits after its own
+  # SIGTERM before deciding SGLang is wedged and killing PID 1's children. It covers SGLang's fixed tail: the drain loop
+  # re-checks every 5s, then schedulers get up to 15s to exit before being
+  # killed. Anything still generating past this is cut off by the kubelet.
+  shutdownReserveSeconds: 20
+  # Sets SGL_FORCE_SHUTDOWN=1 and SGLANG_FORCE_SHUTDOWN=1 (upstream renamed it;
+  # 0.5.10 still reads the old name but warns, 0.5.15 has dropped it), which asks
+  # SGLang to skip its drain and exit as soon as SIGTERM lands. Use it when you
+  # would rather drop in-flight requests than wait -- the preStop hook above still
+  # runs. This is a REQUEST to the engine, and an engine that never reads it -- a
+  # version that dropped the variable, or a pod deleted mid-load before the signal
+  # handler exists -- simply ignores it. preStopKill below is the enforcement.
+  forceShutdown: false
+  # Whether the preStop hook ends by killing SGLang itself: SIGTERM to PID 1, then
+  # SIGKILL to its children after shutdownReserveSeconds if it is still up. Unlike
+  # forceShutdown this needs no cooperation from the engine, which is what makes it
+  # the fallback when the request above goes unheard.
+  #
+  # Applies to single-pod Deployments. The LWS path has its own switch,
+  # lws.leaderPreStopKill, because there the kill additionally has to break a
+  # collective whose workers are already gone.
+  preStopKill: true
+
+scaler:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 5
+  syncPeriodSeconds: 10
+
+  # Where the scaling signal comes from. The two are alternatives, not layers,
+  # and there is no fallback between them:
+  #
+  #   Prometheus  metrics below are PromQL, evaluated against serverAddress, and
+  #               replicas come out of ceil(readyReplicas * value / target).
+  #   Custom      metrics below are not read at all. serverAddress is a decision
+  #               server, and the scaler reads a replica count straight off it.
+  #               Requires customProvider.serviceId.
+  #
+  # Which one is in play also decides what serverAddress means, what has to be
+  # filled in below, and whether scaleDown.deletionCostQuery is consulted.
+  metricProvider: Custom
+
+  # The metric source endpoint. Under Prometheus it is the query API (the
+  # /api/v1/query base) -- the default below is the headless Service the
+  # Prometheus Operator creates, adjust it to your cluster, and note SGLang is
+  # scraped into it via the serviceMonitor further down. Under Custom it is
+  # instead the decision server's base URL, e.g. http://decisions:80.
+  serverAddress: "http://decision-gen.llm-scaler.svc:80"
+  # Optional HTTP headers sent with every fetch from serverAddress (e.g. auth for
+  # a secured endpoint). Used verbatim. Empty for a typical in-cluster
+  # Prometheus. Applies to both providers.
+  serverHeaders: {}
+
+  # Only read when metricProvider is Custom; ignored otherwise.
+  customProvider:
+    # serviceId override
+    serviceId: ""
+    # Request path on serverAddress. The CRD defaults it to /decisions; left
+    # empty here so that default stands rather than being restated.
+    path: ""
+    # Narrows the match to decisions carrying this namespace, for a server that
+    # reports the same serviceId in several -- a serviceId matching more than one
+    # decision is an error rather than a choice.
+    #
+    # Empty (the default) means the RELEASE namespace, the one this deployment
+    # actually runs in, so a duplicate id reported from elsewhere in the cluster
+    # can never be the decision this scaler reads. Set it only when the server
+    # files this service's decisions under some other namespace than the one it
+    # is installed in; there is no way to ask for an unnarrowed match, because a
+    # decision for another namespace is not this release's to follow.
+    namespace: ""
+  # Required (and non-empty) under the Prometheus provider; ignored entirely
+  # under Custom, which gets its recommendation from the decision server.
+  #
+  # Each metric is a PromQL query (returning a single averaged value) plus a
+  # per-replica target. Scaling compares them as
+  # ceil(readyReplicas * value / target). Bake label filters into the query.
+  # The __SCOPE__ token expands to namespace="<ns>", app="<release>-sglang",
+  # scoping the query to THIS deployment's pods — important when several
+  # deployments (even same-named releases in different namespaces) serve the
+  # same model.
+  # A short avg_over_time window keeps the signal robust to a missed scrape and
+  # filters single-sample spikes; keep it short (~1m) so scale-up stays fast —
+  # scale-down conservatism belongs in scaleDown.stabilizationWindowSeconds.
+  metrics:
+    # Queue depth (requests waiting per replica). This is the signal that
+    # actually moves under real load on a small model — its KV cache barely
+    # fills, but requests queue once concurrency exceeds what SGLang can batch.
+    # Note the name differs from vLLM's: sglang:num_queue_reqs, not
+    # vllm:num_requests_waiting.
+    - name: queue-depth
+      query: 'avg(avg_over_time(sglang:num_queue_reqs{__SCOPE__}[1m]))'
+      target: "5"
+  scaleDown:
+    behavior: CacheAware
+    # Hold at the highest recommendation over this window before scaling down, so
+    # a brief metric dip doesn't cause flapping (scale-up stays immediate).
+    # 0 disables it (keeps the metricsMock demo snappy); set e.g. 300 in prod.
+    stabilizationWindowSeconds: 10
+    # Cap on how many replicas one scale-down step removes, so the fleet walks
+    # down instead of bursting from N to minReplicas. 0 disables the cap (keeps
+    # the metricsMock demo snappy); set e.g. 1 in prod.
+    maxStepReplicas: 0
+    deletionCostQuery: ""
+    # Example (scoped to this deployment via __SCOPE__). SGLang's KV-cache
+    # equivalent of vllm:kv_cache_usage_perc is sglang:token_usage:
+    #   deletionCostQuery: 'sglang:token_usage{__SCOPE__} * 100'
+
+sloRequirement:
+  enabled: true
+  name: ""
+  serviceId: ""
+  annotations: {}
+  # The rest of spec, passed through verbatim (latency targets and whatever else
+  # the operator grows). Open by design: that schema belongs to the inference
+  # operator, and a chart change per field would only lag it.
+  extraSpec: {}
+    # ttftMs: 20000
+    # tpotMs: 100
+
+# Deterministic scale-op simulation. When enabled, the scaler queries this mock
+# instead of real Prometheus, so you can drive scaling by hand: set `value`
+# above the target (e.g. 10 vs target 5) to scale toward maxReplicas, below it
+# (e.g. 0) to scale toward minReplicas. Note: the value is static regardless
+# of replica count, so it pegs to the min/max bound rather than settling.
+metricsMock:
+  enabled: false
+  image: "hashicorp/http-echo:0.2.3"
+  # The value the mock returns for the metric query (compared against target).
+  value: "10"
+
+serviceMonitor:
+  # Requires the Prometheus Operator CRDs (monitoring.coreos.com) to be installed.
+  enabled: true
+  # SGLang exposes Prometheus metrics on the inference port at /metrics, but ONLY
+  # when started with --enable-metrics (the chart always passes it). Without that
+  # flag the route is not mounted at all and /metrics returns 404.
+  path: /metrics
+  interval: 15s
+  scrapeTimeout: 10s
+  # Extra labels so the cluster's Prometheus serviceMonitorSelector picks it up,
+  # e.g. { release: kube-prometheus-stack }
+  labels:
+    release: kube-prometheus-stack
+  # Pod labels copied onto the scraped series. `app` lets metric queries scope to
+  # a single deployment (app="<release>-sglang") when several serve the same model.
+  podTargetLabels:
+    - app
+
+# The cache-aware router (CART) for THIS model, deployed as part of this release
+# from the vendored subchart in charts/cart.
+#
+# Everything below `enabled` is the subchart's own values (charts/cart/values.yaml
+# is the documented source of truth, comments included). The keys restated here
+# are only the ones worth setting per model; leave them commented out to inherit
+# the subchart default.
+#
+# This is the whole switch. With modelRoute.enabled, turning it on also routes
+# through the CART -- nothing under modelRoute has to be set, or can be:
+#   - the modelRoute.cart block is written from the CART deployed here
+#   - a `- use: cart` tier goes to the top of modelRoute.nginx.peers
+#
+# The route never points anywhere else. A CART holds one model's prefix cache, so
+# it belongs to the release that owns that model and is never shared or borrowed
+# from elsewhere -- which is why there is nothing to configure.
+#
+# A deployed CART is therefore always a routed CART, and there is no switch under
+# modelRoute to separate the two. Nor is separating them useful: autoconfig
+# writes CART's worker list off that very CR, so a CART with no ModelRoute naming
+# it never gets one -- it waits in Init (deliberately, rather than CrashLooping)
+# and then CrashLoops on the empty list once waitForWorkers gives up.
+#
+# The one case for an unrouted CART is the subchart's standalone mode, where the
+# workers are written into baseConfig below by hand. That means this on and
+# modelRoute.enabled off -- not a CART deployed alongside a route that ignores it.
+cart:
+  enabled: true
+  # One ConfigMap, two keys: config.yaml is the chart's base (baseConfig below) and
+  # workers.yaml is autoconfig's, written off the ModelRoute. The chart's template
+  # never emits that key, so helm upgrade has nothing to patch there and the two stop
+  # contending over one document. modelRoute.cart.outputKey follows this.
+  configOverlays:
+    - key: workers.yaml
+      autoconfig: true
+  # image:
+  #   repository: modelpilot/cache_aware_router
+  #   tag: ""            # defaults to the subchart's appVersion
+  # CART's listen port, which the ModelRoute's cart.port follows.
+  # service:
+  #   port: 8071
+  # Per-model tuning of the static config.yaml base (workers land in the override
+  # overlay above). Replaces the whole document, so copy the subchart's default first.
+  # baseConfig: |
+  #   ...
+  # resources:
+  #   limits: { cpu: "4", memory: 4Gi }
+  # Scheduling. CART is CPU-only, so it has no business occupying a GPU node --
+  # pin it away if yours are tainted or scarce. affinity ADDS to the subchart's
+  # HA anti-affinity (which keeps the two replicas off one node) instead of
+  # replacing it; write your own podAntiAffinity to override that.
+  # nodeSelector: {}
+  # tolerations: []
+  # affinity: {}
+
+# Publish this deployment to autoconfig as a ModelRoute
+# (routing.gpucluster.io/v1alpha1), so openresty's peers and the CART workers
+# follow the pods instead of being maintained by hand.
+#
+# Requires the ModelRoute CRD, which ships with the autoconfig chart. With it
+# absent, enabling this fails the install with "no matches for kind ModelRoute"
+# -- the chart does not carry a copy, because the operator owns that schema.
+#
+# LLMScaler and ModelRoute are complementary and independent: the scaler decides
+# how many replicas there are, and autoconfig keeps the routes matching whatever
+# it decides. Neither needs the other.
+modelRoute:
+  enabled: false
+  # ModelRoute name; also the default openresty route (external path
+  # 8080/<name>/) and the default monitor model name. Defaults to the release
+  # name.
+  #
+  # The CR is always created in the release namespace, alongside the Deployment,
+  # so it is installed and removed with the rest of the release. Autoconfig
+  # watches cluster-wide and every reference below is fully qualified
+  # ("ns/name"), so openresty, CART and monitor can still live elsewhere.
+  name: ""
+  annotations: {}
+
+  # The backend bucket that feeds CART's workers, nginx's backend peers and
+  # monitor's service rows.
+  #
+  # Which backends those are is NOT configurable: it is always this release's own
+  # Service on service.port. Routing from the chart that owns the Deployment is
+  # the point -- the two cannot drift, and a scale event is all it takes for
+  # every route to follow. To route to something else, write a ModelRoute for it
+  # there, or by hand.
+  discovery:
+    # Ready endpoints only, by default. Endpoints being drained are excluded
+    # either way.
+    includeNotReady: false
+
+  slo:
+    # Off keeps the static ttft_limit_ms / tps_limit_tps in nginx.values.
+    enabled: true
+    # aka serviceId
+    name: ""
+
+  # The openresty (nginx) route. This is the only required section.
+  nginx:
+    # Defaults to the ModelRoute name above. It becomes the conf file name, the
+    # openresty dict name, the unix socket name and the external path key, so it
+    # must be [a-z0-9._-] only.
+    route: ""
+    # REQUIRED: the ConfigMap autoconfig writes the route into ("ns/name"),
+    # shared by every model on one openresty with a key per route. There is no
+    # default the chart could guess -- e.g. llm-route/openresty-conf.
+    outputConfigMap: ""
+    # Optional openresty entrypoint Service ("ns/name"). Feeds monitor's nginx
+    # row and makes entrypoint scaling event-driven. Falls back to selector when
+    # empty; service wins when both are set.
+    service: ""
+    selector: ""
+    # Arbitrary tuning knobs, rendered verbatim into openresty's lua route table
+    # (so a new knob needs no chart change). Common ones: ttft_limit_ms,
+    # tps_limit_tps, adaptive_cc_min, default_max.
+    values: {}
+      # Setting tps_limit_tps opts into adaptive concurrency (AIMD): when the
+      # decode rate falls below this, the concurrency ceiling shrinks.
+      # tps_limit_tps: "30"
+      # Concurrency for any peer with no maxConcurrency of its own.
+      # default_max: "120"
+    # Ordered peer groups, highest priority first. Traffic only cascades to a
+    # lower tier once every peer above it is banned.
+    #
+    # The default is the two tiers that need nothing outside this chart: direct
+    # pod IPs, then the Service ClusterIP underneath. That bottom tier is a
+    # static safety net -- if autoconfig is down during a rollout, every pod IP
+    # it knows can be stale at once, and the ClusterIP still resolves because
+    # kube-proxy maintains it.
+    #
+    # A cart tier is added on top of whatever is listed here whenever the route
+    # has a CART (cart.enabled above), at one priority higher than the highest
+    # below, so it leads and traffic still cascades down when it is banned. It
+    # carries maxConcurrencyFromBackend, which sizes its limit dynamically as
+    # (backend maxConcurrency x backend count) so it tracks scaling instead of
+    # being pinned to a stale number -- unless no backend tier here carries a
+    # maxConcurrency to multiply, in which case it is injected without a limit of
+    # its own and falls back to values.default_max above.
+    #
+    # Naming a cart peer explicitly turns the injection off and takes this list
+    # exactly as written -- the way to pin its priority or its concurrency:
+    #   - use: cart
+    #     priority: 9
+    #     maxConcurrency: 400
+    peers:
+      - use: backend
+        priority: 2
+        maxConcurrency: 100
+      - use: backend-svc
+        priority: 1
+
+  # Cache-aware router (CART) in front of the backends. Off means nginx talks to
+  # them directly.
+  #
+  # Which CART is NOT configurable, for the same reason discovery is not: it is
+  # always the one cart.enabled deployed above, reached through its ClusterIP so
+  # a CART failover or rollout stays invisible to openresty. The chart knows the
+  # Service and ConfigMap it generated and writes them straight in, so there is
+  # no pair of names here that can drift apart. A CART is per-model and never
+  # shared, so there is no other CART this route could sensibly name.
+  #
+  # There is no `enabled` here: cart.enabled above is the only switch, and a
+  # deployed CART is always a routed one. A second flag could only restate that
+  # or contradict it, and one that says "route to a CART" while quietly doing
+  # nothing (because none was deployed) is worse than not having it.
+  cart:
+    # Per-worker max_load.
+    maxLoad: 20
+
+  # Write these backends into monitor's config as well. Monitor reloads it every
+  # 60s on its own, so no sidecar is involved.
+  monitor:
+    enabled: true
+    # REQUIRED when enabled: monitor's ConfigMap ("ns/name"), shared across
+    # models with one key per model.
+    outputConfigMap: ""
+    # Defaults to model.name (what the chart passes to --served-model-name).
+    model: ""
+    # Empty means autoconfig derives it from the node's GPU label
+    # (nvidia.com/gpu.product, set by GFD). Set it only to override that, or
+    # where no such label exists.
+    gpuType: ""
+    # Monitor's nginx and router rows, both on by default when the sections they
+    # reuse are configured (nginx.service and cart respectively). Set to false
+    # to turn one off; null leaves autoconfig's default in place.
+    nginx: null
+    router: null
+
+# Additional environment variables on the SGLang container. Merged with
+# SGL_FORCE_SHUTDOWN when lifecycle.forceShutdown is on.
+env: []
+  # - name: HF_TOKEN
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: huggingface
+  #       key: token
+
+# Additional volumes on the output Deployment definition. The model volume built
+# from model.localPath is always mounted; these are added alongside it.
+#
+# Be careful with hostPath: with the scaler on, several replicas can land on one
+# node and would then share it. Read-only reference data (the model itself) is
+# fine that way. Anything the server WRITES is not -- a JIT or compile cache
+# shared by concurrent pods corrupts, so give those an emptyDir per pod.
+volumes: []
+  # - name: shm
+  #   emptyDir:
+  #     medium: Memory
+  #     sizeLimit: 8Gi
+
+# Additional volumeMounts on the output Deployment definition.
+volumeMounts: []
+  # - name: shm
+  #   mountPath: /dev/shm
+
+# Do not set nvidia.com/gpu here -- model.gpus renders it, and the chart refuses
+# a second spelling rather than let the two drift. Other extended resources do
+# belong here, e.g. an RDMA device from the shared-device plugin:
+#
+#   limits: { rdma/hca_shared: "1" }
+resources: {}
+  # requests:
+  #   cpu: "8"
+  #   memory: 64Gi
+  #   ephemeral-storage: 20Gi
+  # limits:
+  #   memory: 96Gi
+  #   ephemeral-storage: 20Gi
+
+# securityContext for the SGLang container. Empty means the image's own.
+#
+# The one that matters for multi-node on an IB fabric is IPC_LOCK: without it
+# the container cannot raise its locked-memory limit, so the `ulimit -l
+# unlimited` the lws command form runs is a no-op and the RDMA driver cannot pin
+# its buffers. It is a single capability, not privileged mode:
+#
+#   securityContext:
+#     capabilities:
+#       add: ["IPC_LOCK"]
+securityContext: {}
+
+# Extra labels on the pods (not on the Deployment/LWS object, and never on the
+# Deployment's selector, which is immutable). Applied to every pod the chart
+# makes -- LWS leader and worker alike, which is what you want for anything a
+# webhook keys off.
+#
+# The reason this exists: rdma-injector (charts/rdma-injector) watches for
+#
+#   podLabels:
+#     rdma-ib: "true"
+#
+# and injects the per-node RDMA environment -- the /etc/gpu-node hostPath plus a
+# `source` of nccl-ib.env, which resolves NCCL_IB_HCA to the HCAs that are
+# actually healthy ON THAT NODE. That value cannot be written into this chart:
+# at admission the pod is not scheduled yet, so nobody knows which node's answer
+# applies.
+#
+# Note it only injects the `source` into containers started through a shell,
+# which under lws.enabled is exactly what the engine gets. A single-node
+# Deployment pod runs the engine in exec form and would receive the mount
+# without the source -- meaning NCCL_IB_HCA never gets set. That is not a real
+# gap (one node needs no fabric between GPUs) but do not read a labelled
+# Deployment pod as RDMA-enabled.
+podLabels: {}
+
+# A PodDisruptionBudget over the engine pods, so a node drain or a
+# cluster-autoscaler scale-down cannot take this model out all at once. The CART
+# subchart has its own (cart.podDisruptionBudget) and is unaffected by this.
+#
+# On by default, which is safe only because the default budget is
+# maxUnavailable: it is relative to the live replica count, so it can never
+# become unsatisfiable and never blocks a drain outright. At the chart's own
+# single-replica default it is simply a no-op (one replica, one disruption
+# allowed). Switching to minAvailable is what makes this object able to say no,
+# and that is the case to think before enabling -- see below.
+#
+# Read the header of templates/pdb.yaml before tuning this. The short version of
+# what a PDB is NOT: it does not keep replicas alive (a crash, an OOM kill or the
+# scaler scaling down are not disruptions it can refuse), and it does not govern
+# `helm upgrade` -- rollouts go through strategy / lws.rolloutStrategy instead.
+podDisruptionBudget:
+  enabled: true
+  annotations: {}
+
+  # Exactly one of minAvailable / maxUnavailable, the other left empty. The API
+  # server rejects a PDB with both or with neither, so the chart fails the render
+  # rather than let the install fail.
+  #
+  # maxUnavailable is the default here because it is the one that stays correct
+  # while the fleet resizes underneath it: "at most one at a time" means the same
+  # thing at 2 replicas and at 40, and it can never reach zero allowed
+  # disruptions, so a node drain always makes progress.
+  maxUnavailable: 1
+
+  # minAvailable is the other half, and the one to reach for when there is a
+  # floor that matters more than drain speed -- "keep at least 8 serving, take as
+  # many of the rest as you like".
+  #
+  # It has a foot-gun the chart guards against: disruptionsAllowed is
+  # (healthy - minAvailable), so a minAvailable that meets or exceeds the fleet's
+  # floor (scaler.minReplicas, or replicaCount / lws.replicas x lws.size without
+  # the scaler) allows ZERO evictions the moment the fleet is at that floor. A
+  # drain then blocks forever -- it retries rather than times out, and the scaler
+  # adds replicas for traffic, not because a drain is waiting. `minAvailable: 1`
+  # on a one-replica release is that mistake in its most common form, and
+  # rendering fails with the arithmetic spelled out.
+  #
+  # Percentages ("50%") are counted in PODS and rounded up. Under lws.enabled
+  # that is worth stopping on: pods are not groups, and half a group is not half
+  # an instance -- it is a dead one.
+  minAvailable: ""
+
+  # AlwaysAllow | IfHealthyBudget | "" (leave the API server's default,
+  # IfHealthyBudget).
+  #
+  # This is the field that decides whether a drain can ever get unstuck. Under
+  # IfHealthyBudget a pod that is not Ready may only be evicted while the budget
+  # is already satisfied -- so a fleet that is one replica short cannot be
+  # drained at all, including the very pod that is stuck. On this chart "not
+  # Ready" is also the normal state for the ~20 minutes a large model spends
+  # loading, which makes that window routine rather than exceptional.
+  #
+  # AlwaysAllow gives up nothing real in exchange: an unready pod is serving no
+  # traffic, so evicting it costs a restart, not availability.
+  #
+  # Needs Kubernetes >= 1.27 (>= 1.26 with the PDBUnhealthyPodEvictionPolicy gate
+  # on). An older API server silently drops the field, which is the old
+  # behaviour rather than an error -- set it to "" if you would rather not carry
+  # a field your cluster ignores.
+  unhealthyPodEvictionPolicy: AlwaysAllow
+
+# Deployment-only, all three: under lws.enabled the rollout is
+# lws.rolloutStrategy instead, and a LeaderWorkerSet has neither a progress
+# deadline to blow nor ReplicaSets to keep.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+progressDeadlineSeconds: 1800
+
+# How many old ReplicaSets to keep for rollback. They hold no pods, so this is
+# about rollback depth, not resources.
+revisionHistoryLimit: 10
+
+schedulerName: ""
+
+# PriorityClass for every pod this chart makes -- Deployment pod, LWS leader and
+# LWS worker alike. One value on purpose: preempting either member of a group
+# costs the whole group, so ranking them differently buys nothing.
+#
+# It does not defragment anything. Preemption frees space on ONE node by killing
+# lower-priority pods there; it never repacks existing pods, and does nothing at
+# all if there is no lower-priority work to evict. What it does buy is queue
+# order (a group is considered before smaller pods for freed capacity) and a say
+# in who loses when capacity is short.
+#
+# Under lws.enabled, note preemption is per-pod and blind to the group: a
+# preemptor can win the leader's node and lose the worker's, leaving GPUs held by
+# a group that cannot run. Pair a high priority with `preemptionPolicy: Never` on
+# the class for ordering without that risk, or use a gang scheduler.
+priorityClassName: ""
+
+# Pin the GPU pods to particular nodes. `affinity` is the place for node
+# affinity / anti-affinity rules; nodeSelector and tolerations are the simpler
+# forms of the same idea.
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
