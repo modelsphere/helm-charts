@@ -128,6 +128,25 @@ entries:
   sglang:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-09-21T07:00:28.30815059Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.2
+    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
+    digest: 9d1f68883ef3ecbbed62e500fbd83130b5e7c06c080340e6f027b1e0d42f33c7
+    home: https://github.com/project-modelpilot/helm-charts
+    name: sglang
+    sources:
+    - https://github.com/project-modelpilot/helm-charts
+    type: application
+    urls:
+    - https://github.com/project-modelpilot/helm-charts/releases/download/sglang-0.7.3/sglang-0.7.3.tgz
+    version: 0.7.3
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-09-21T04:11:59.678286186Z"
     dependencies:
     - condition: cart.enabled
@@ -186,6 +205,25 @@ entries:
   vllm:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-09-21T07:00:28.559682849Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.2
+    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
+    digest: 891df25fb70dc174c1cf7cf56f4e0ba99d78fa8e0c04bece9ed5a41b130efb83
+    home: https://github.com/project-modelpilot/helm-charts
+    name: vllm
+    sources:
+    - https://github.com/project-modelpilot/helm-charts
+    type: application
+    urls:
+    - https://github.com/project-modelpilot/helm-charts/releases/download/vllm-0.4.3/vllm-0.4.3.tgz
+    version: 0.4.3
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-09-21T04:12:00.009088548Z"
     dependencies:
     - condition: cart.enabled
@@ -241,4 +279,4 @@ entries:
     urls:
     - https://github.com/project-modelpilot/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-09-21T04:12:00.009125006Z"
+generated: "2026-09-21T07:00:28.559740344Z"
