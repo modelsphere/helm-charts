@@ -6,7 +6,11 @@ sources:
   - https://github.com/modelsphere/helm-charts
   - https://github.com/modelsphere/llm-openresty
 type: application
-version: 0.2.0
+# The chart version tracks appVersion for this chart -- the same numbering the
+# internal GitLab repo publishes -- so one pinned version resolves against
+# either repository. Not a rule for every chart here: cart carries a chart
+# version of its own, independent of the app it ships.
+version: 0.2.6
 # The exporter image tag: values.image.tag is empty by default and falls back to
 # this, so a release moves both together.
 #
