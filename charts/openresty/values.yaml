@@ -138,16 +138,15 @@ existingSecret: ""           # takes precedence over create; both empty = no aut
 # (A whole-volume mount, never subPath -- subPath copies the file once and stops
 # following the ..data symlink swap, so rotation would silently stop working.)
 
-# Where to ship captured request/response bodies (the bodylog chart). Empty means
-# body logging is OFF, and there is deliberately no default address: a default
-# would make a deployment that never configured bodylog send full prompts and
-# completions to a host it did not choose. That is a data-exfiltration shape, not
-# a convenience.
+# Where to ship captured request/response bodies (the bodylog chart). Defaults to
+# an in-cluster bodylog listener in the llm-route namespace -- the standard layout
+# this stack is deployed with. Set it to your listener's address if the listener
+# lives elsewhere, or to "" to turn body logging off (nothing is sent, and there
+# is no fallback address).
 #
-# When you do set it, it MUST be a fully qualified name
-# (bodylog.<namespace>.svc.cluster.local). nginx's cosocket resolver does not
-# apply search domains, so a bare Service name silently fails to resolve and the
-# frames are dropped with no error on the request path.
+# It MUST be a fully qualified name (bodylog.<namespace>.svc.cluster.local). nginx's
+# cosocket resolver does not apply search domains, so a bare Service name silently
+# fails to resolve and the frames are dropped with no error on the request path.
 bodylog:
-  host: ""
+  host: "bodylog.llm-route.svc.cluster.local"
   port: 9999

@@ -6,7 +6,7 @@ sources:
   - https://github.com/modelsphere/helm-charts
   - https://github.com/modelsphere/llm-openresty
 type: application
-version: 0.2.0
+version: 0.2.1
 # The router image tag: values.image.tag is empty by default and falls back to
 # this, so a release moves both together.
 #
