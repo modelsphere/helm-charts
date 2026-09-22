@@ -3,8 +3,9 @@ entries:
   bodylog:
   - apiVersion: v2
     appVersion: 0.1.13
-    created: 2026-09-22T09:12:42.321987177Z
-    description: 'Body-log listener for the OpenResty router: receives full request/response frames over TCP, writes them as hourly JSONL, and serves rollups over HTTP'
+    created: "2026-09-22T09:12:42.321987177Z"
+    description: 'Body-log listener for the OpenResty router: receives full request/response
+      frames over TCP, writes them as hourly JSONL, and serves rollups over HTTP'
     digest: dd0bd8327675601ad88d121b1b8c838bcd6f9c1fb7fa815a499f1800f7ebf1d8
     home: https://github.com/modelsphere/helm-charts
     keywords:
@@ -22,8 +23,9 @@ entries:
   bodylog-exporter:
   - apiVersion: v2
     appVersion: 0.2.6
-    created: 2026-09-22T09:12:42.499617252Z
-    description: Turns the body-log listener's detail records into Prometheus metrics, and polls the router's control-plane endpoints for live routing state
+    created: "2026-09-22T09:12:42.499617252Z"
+    description: Turns the body-log listener's detail records into Prometheus metrics,
+      and polls the router's control-plane endpoints for live routing state
     digest: aa736146d839231a04a888b8ad63d44d703cfb14eb89ec128d64559facab2e15
     home: https://github.com/modelsphere/helm-charts
     keywords:
@@ -42,8 +44,9 @@ entries:
   cart:
   - apiVersion: v2
     appVersion: v0.6.4
-    created: 2026-09-21T04:11:59.224197899Z
-    description: 'Cache-aware router: routes each request to the replica that already holds the longest matching prompt prefix, while keeping load balanced'
+    created: "2026-09-21T04:11:59.224197899Z"
+    description: 'Cache-aware router: routes each request to the replica that already
+      holds the longest matching prompt prefix, while keeping load balanced'
     digest: 0d7d41a1ff1e5e91270b70cbb19a4431c797402abe0e00493fef909b618e6c8b
     home: https://github.com/project-modelpilot/helm-charts
     keywords:
@@ -60,8 +63,9 @@ entries:
     version: 0.2.2
   - apiVersion: v2
     appVersion: v0.6.4
-    created: 2026-09-21T03:59:06.982565314Z
-    description: 'Cache-aware router: routes each request to the replica that already holds the longest matching prompt prefix, while keeping load balanced'
+    created: "2026-09-21T03:59:06.982565314Z"
+    description: 'Cache-aware router: routes each request to the replica that already
+      holds the longest matching prompt prefix, while keeping load balanced'
     digest: d5eb2b7dfac7ff79aa5d898752cdffb79472656201ca32485330d91f62e2dfe7
     home: https://github.com/project-modelpilot/helm-charts
     keywords:
@@ -78,8 +82,9 @@ entries:
     version: 0.2.1
   - apiVersion: v2
     appVersion: v0.6.4
-    created: 2026-09-21T03:48:29.922538747Z
-    description: 'Cache-aware router: routes each request to the replica that already holds the longest matching prompt prefix, while keeping load balanced'
+    created: "2026-09-21T03:48:29.922538747Z"
+    description: 'Cache-aware router: routes each request to the replica that already
+      holds the longest matching prompt prefix, while keeping load balanced'
     digest: ba564b832a134366737bd722ee57e5de6e5f38e9769644f177a5d7c3aa7f0af8
     home: https://github.com/project-modelpilot/helm-charts
     keywords:
@@ -94,11 +99,37 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/cart-0.2.0/cart-0.2.0.tgz
     version: 0.2.0
+  llmscaleoperator:
+  - apiVersion: v2
+    appVersion: 0.3.1
+    created: "2026-09-22T09:34:16.287269807Z"
+    description: 'Kubernetes operator that autoscales LLM inference workloads on LLM-specific
+      signals -- KV-cache utilization, queue depth, TPM/capacity load -- rather than
+      CPU and memory. An HPA specialized for token serving.  Ships the LLMScaler CRD
+      (autoscaling.4pd.io/v1alpha1) and the controller that reconciles it. The SLO
+      storage side lives in the slo-decision-gen chart; the two are independent, and
+      this one is what you need for autoscaling alone.  Generated from the llm-operator
+      repo (dist/chart, kubebuilder helm plugin) and maintained here, because this
+      is where charts are published from. '
+    digest: 015d0464e65f57f61bda7d32cd54030f597c97393ca7e2920508b551123de506
+    keywords:
+    - llm
+    - autoscaling
+    - operator
+    - vllm
+    - sglang
+    name: llmscaleoperator
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/llmscaleoperator-0.2.1/llmscaleoperator-0.2.1.tgz
+    version: 0.2.1
   openresty:
   - apiVersion: v2
     appVersion: 0.1.20
-    created: 2026-09-22T09:12:42.683439268Z
-    description: 'Session-affinity router for LLM inference backends: pins a conversation to the backend that already holds its prefix cache, with active health checking, adaptive concurrency and full body logging'
+    created: "2026-09-22T09:12:42.683439268Z"
+    description: 'Session-affinity router for LLM inference backends: pins a conversation
+      to the backend that already holds its prefix cache, with active health checking,
+      adaptive concurrency and full body logging'
     digest: 0b4cdc995c52a5caf9b0a83e2ff00a7859eef21d80e19135b98c3a471aa99671
     home: https://github.com/modelsphere/helm-charts
     keywords:
@@ -117,8 +148,12 @@ entries:
   rdma-injector:
   - apiVersion: v2
     appVersion: 0.2.0
-    created: 2026-09-21T04:11:59.460557298Z
-    description: 'Mutating admission webhook that spares workload manifests the RDMA boilerplate: pods labelled rdma-ib:"true" get the /etc/gpu-node mount and an NCCL_IB_HCA sourced from the node''s healthy InfiniBand ports injected automatically. The webhook code is baked into the image; its serving certificate is self-signed by the chart at install time, so it installs into any namespace.'
+    created: "2026-09-21T04:11:59.460557298Z"
+    description: 'Mutating admission webhook that spares workload manifests the RDMA
+      boilerplate: pods labelled rdma-ib:"true" get the /etc/gpu-node mount and an
+      NCCL_IB_HCA sourced from the node''s healthy InfiniBand ports injected automatically.
+      The webhook code is baked into the image; its serving certificate is self-signed
+      by the chart at install time, so it installs into any namespace.'
     digest: c6f38589b25eb2e1429c117a15b03520eb44775a3cb9b3ad6a6ec4d234e532a4
     home: https://github.com/project-modelpilot/helm-charts
     name: rdma-injector
@@ -130,8 +165,12 @@ entries:
     version: 0.2.3
   - apiVersion: v2
     appVersion: 0.2.0
-    created: 2026-09-21T03:59:07.192206909Z
-    description: 'Mutating admission webhook that spares workload manifests the RDMA boilerplate: pods labelled rdma-ib:"true" get the /etc/gpu-node mount and an NCCL_IB_HCA sourced from the node''s healthy InfiniBand ports injected automatically. The webhook code is baked into the image; its serving certificate is self-signed by the chart at install time, so it installs into any namespace.'
+    created: "2026-09-21T03:59:07.192206909Z"
+    description: 'Mutating admission webhook that spares workload manifests the RDMA
+      boilerplate: pods labelled rdma-ib:"true" get the /etc/gpu-node mount and an
+      NCCL_IB_HCA sourced from the node''s healthy InfiniBand ports injected automatically.
+      The webhook code is baked into the image; its serving certificate is self-signed
+      by the chart at install time, so it installs into any namespace.'
     digest: 8bae4d1d12abacdf8f2edd083466b937330653b01da1752af75866e4369f688a
     home: https://github.com/project-modelpilot/helm-charts
     name: rdma-injector
@@ -143,8 +182,12 @@ entries:
     version: 0.2.2
   - apiVersion: v2
     appVersion: 0.2.0
-    created: 2026-09-21T03:54:21.934320698Z
-    description: 'Mutating admission webhook that spares workload manifests the RDMA boilerplate: pods labelled rdma-ib:"true" get the /etc/gpu-node mount and an NCCL_IB_HCA sourced from the node''s healthy InfiniBand ports injected automatically. The webhook code is baked into the image; its serving certificate is self-signed by the chart at install time, so it installs into any namespace.'
+    created: "2026-09-21T03:54:21.934320698Z"
+    description: 'Mutating admission webhook that spares workload manifests the RDMA
+      boilerplate: pods labelled rdma-ib:"true" get the /etc/gpu-node mount and an
+      NCCL_IB_HCA sourced from the node''s healthy InfiniBand ports injected automatically.
+      The webhook code is baked into the image; its serving certificate is self-signed
+      by the chart at install time, so it installs into any namespace.'
     digest: f4b722cfdf290e6f56a8c7d9e62a36e5ab4a2aadbb79037520fd566e8b1cbb6d
     home: https://github.com/project-modelpilot/helm-charts
     name: rdma-injector
@@ -156,8 +199,10 @@ entries:
     version: 0.2.1
   - apiVersion: v2
     appVersion: 0.2.0
-    created: 2026-09-21T03:48:30.185353154Z
-    description: rdma-injector mutating admission webhook —— 给带 label rdma-ib:"true" 的 pod 自动注入 /etc/gpu-node 挂载 + 启动时 source NCCL_IB_HCA(本机好 IB 口),业务 manifest 零 RDMA 样板。 代码烤进镜像;serving 证书由 helm 在 install 时自签(可装到任意 namespace)。
+    created: "2026-09-21T03:48:30.185353154Z"
+    description: rdma-injector mutating admission webhook —— 给带 label rdma-ib:"true"
+      的 pod 自动注入 /etc/gpu-node 挂载 + 启动时 source NCCL_IB_HCA(本机好 IB 口),业务 manifest 零
+      RDMA 样板。 代码烤进镜像;serving 证书由 helm 在 install 时自签(可装到任意 namespace)。
     digest: 91012ad1b898649bcfe53df1453fda0ef4241efb57551ace80614c14642a09bb
     home: https://github.com/project-modelpilot/helm-charts
     name: rdma-injector
@@ -170,13 +215,14 @@ entries:
   sglang:
   - apiVersion: v2
     appVersion: 1.0.0
-    created: 2026-09-22T07:52:55.077182853Z
+    created: "2026-09-22T07:52:55.077182853Z"
     dependencies:
     - condition: cart.enabled
       name: cart
       repository: file://../cart
       version: 0.2.2
-    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection
+    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
     digest: 8fdd9e8a144f0208030bf0ab87a54fa2612e659fb221f3713a050101fd21559d
     home: https://github.com/modelsphere/helm-charts
     name: sglang
@@ -188,13 +234,14 @@ entries:
     version: 0.7.4
   - apiVersion: v2
     appVersion: 1.0.0
-    created: 2026-09-21T07:00:28.30815059Z
+    created: "2026-09-21T07:00:28.30815059Z"
     dependencies:
     - condition: cart.enabled
       name: cart
       repository: file://../cart
       version: 0.2.2
-    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection
+    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
     digest: 9d1f68883ef3ecbbed62e500fbd83130b5e7c06c080340e6f027b1e0d42f33c7
     home: https://github.com/project-modelpilot/helm-charts
     name: sglang
@@ -206,13 +253,14 @@ entries:
     version: 0.7.3
   - apiVersion: v2
     appVersion: 1.0.0
-    created: 2026-09-21T04:11:59.678286186Z
+    created: "2026-09-21T04:11:59.678286186Z"
     dependencies:
     - condition: cart.enabled
       name: cart
       repository: file://../cart
       version: 0.2.2
-    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection
+    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
     digest: 450eefc49e472b91ac247d115c91037d301decd91923636e8a34ad36c0fd32aa
     home: https://github.com/project-modelpilot/helm-charts
     name: sglang
@@ -224,13 +272,14 @@ entries:
     version: 0.7.2
   - apiVersion: v2
     appVersion: 1.0.0
-    created: 2026-09-21T03:59:07.486386253Z
+    created: "2026-09-21T03:59:07.486386253Z"
     dependencies:
     - condition: cart.enabled
       name: cart
       repository: file://../cart
       version: 0.2.1
-    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection
+    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
     digest: 150b0c80ecd8c65fc8a8cb4daa6f31c0478596698bdb0833bfe7aca37522a315
     home: https://github.com/project-modelpilot/helm-charts
     name: sglang
@@ -242,13 +291,14 @@ entries:
     version: 0.7.1
   - apiVersion: v2
     appVersion: 1.0.0
-    created: 2026-09-21T03:48:30.404692782Z
+    created: "2026-09-21T03:48:30.404692782Z"
     dependencies:
     - condition: cart.enabled
       name: cart
       repository: file://../cart
       version: 0.2.0
-    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection
+    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
     digest: 411ecde441eb310c040924c97aa8e5d54b2ddb4f6b13b702ccddfa23ef9bc73b
     home: https://github.com/project-modelpilot/helm-charts
     name: sglang
@@ -261,13 +311,14 @@ entries:
   vllm:
   - apiVersion: v2
     appVersion: 1.0.0
-    created: 2026-09-21T07:00:28.559682849Z
+    created: "2026-09-21T07:00:28.559682849Z"
     dependencies:
     - condition: cart.enabled
       name: cart
       repository: file://../cart
       version: 0.2.2
-    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection
+    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
     digest: 891df25fb70dc174c1cf7cf56f4e0ba99d78fa8e0c04bece9ed5a41b130efb83
     home: https://github.com/project-modelpilot/helm-charts
     name: vllm
@@ -279,13 +330,14 @@ entries:
     version: 0.4.3
   - apiVersion: v2
     appVersion: 1.0.0
-    created: 2026-09-21T04:12:00.009088548Z
+    created: "2026-09-21T04:12:00.009088548Z"
     dependencies:
     - condition: cart.enabled
       name: cart
       repository: file://../cart
       version: 0.2.2
-    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection
+    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
     digest: 18f5c58d3b050da8c0dfa33845689b4a595bfc6d0984e7d7785e9f2671f34c91
     home: https://github.com/project-modelpilot/helm-charts
     name: vllm
@@ -297,13 +349,14 @@ entries:
     version: 0.4.2
   - apiVersion: v2
     appVersion: 1.0.0
-    created: 2026-09-21T03:59:07.714561095Z
+    created: "2026-09-21T03:59:07.714561095Z"
     dependencies:
     - condition: cart.enabled
       name: cart
       repository: file://../cart
       version: 0.2.1
-    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection
+    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
     digest: 545fed3e85b91e37a0989e33a12ebe1860f2ea1d992248cc391e2b4ffe23c085
     home: https://github.com/project-modelpilot/helm-charts
     name: vllm
@@ -315,13 +368,14 @@ entries:
     version: 0.4.1
   - apiVersion: v2
     appVersion: 1.0.0
-    created: 2026-09-21T03:48:30.650446674Z
+    created: "2026-09-21T03:48:30.650446674Z"
     dependencies:
     - condition: cart.enabled
       name: cart
       repository: file://../cart
       version: 0.2.0
-    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection
+    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
     digest: 3bc1c55ac915b016085a15732a9a120d2c6aca41f6bb765eb59d38594f6275a0
     home: https://github.com/project-modelpilot/helm-charts
     name: vllm
@@ -331,4 +385,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: 2026-09-22T09:12:42.68348334Z
+generated: "2026-09-22T09:34:16.287307067Z"
