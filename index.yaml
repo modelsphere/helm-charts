@@ -191,6 +191,25 @@ entries:
   sglang:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-09-22T07:52:55.077182853Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.2
+    description: SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
+    digest: 8fdd9e8a144f0208030bf0ab87a54fa2612e659fb221f3713a050101fd21559d
+    home: https://github.com/modelsphere/helm-charts
+    name: sglang
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/sglang-0.7.4/sglang-0.7.4.tgz
+    version: 0.7.4
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-09-21T07:00:28.30815059Z"
     dependencies:
     - condition: cart.enabled
@@ -342,4 +361,4 @@ entries:
     urls:
     - https://github.com/project-modelpilot/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-09-21T15:24:28.479495182Z"
+generated: "2026-09-22T07:52:55.332311001Z"
