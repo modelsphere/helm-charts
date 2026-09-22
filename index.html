@@ -32,21 +32,21 @@
   <h1>ModelPilot Helm Charts</h1>
   <p class="lede">Helm charts for running large language models on Kubernetes.</p>
 
-<pre><code>helm repo add modelpilot https://project-modelpilot.github.io/helm-charts
+<pre><code>helm repo add modelsphere https://modelsphere.github.io/helm-charts
 helm repo update
-helm search repo modelpilot</code></pre>
+helm search repo modelsphere</code></pre>
 
   <div class="tablewrap">
   <table>
     <thead><tr><th>Chart</th><th>Version</th><th>App version</th><th>Description</th></tr></thead>
     <tbody>
-      <tr><td><code>modelpilot/bodylog</code></td><td>0.2.0</td><td>0.1.13</td><td>Body-log listener for the OpenResty router: receives full request/response frames over TCP, writes them as hourly JSONL, and serves rollups over HTTP</td></tr>
-      <tr><td><code>modelpilot/bodylog-exporter</code></td><td>0.2.0</td><td>0.2.6</td><td>Turns the body-log listener&#x27;s detail records into Prometheus metrics, and polls the router&#x27;s control-plane endpoints for live routing state</td></tr>
-      <tr><td><code>modelpilot/cart</code></td><td>0.2.2</td><td>v0.6.4</td><td>Cache-aware router: routes each request to the replica that already holds the longest matching prompt prefix, while keeping load balanced</td></tr>
-      <tr><td><code>modelpilot/openresty</code></td><td>0.2.0</td><td>0.1.20</td><td>Session-affinity router for LLM inference backends: pins a conversation to the backend that already holds its prefix cache, with active health checking, adaptive concurrency and full body logging</td></tr>
-      <tr><td><code>modelpilot/rdma-injector</code></td><td>0.2.3</td><td>0.2.0</td><td>Mutating admission webhook that spares workload manifests the RDMA boilerplate: pods labelled rdma-ib:&quot;true&quot; get the /etc/gpu-node mount and an NCCL_IB_HCA sourced from the node&#x27;s healthy InfiniBand ports injected automatically. The webhook code is baked into the image; its serving certificate is self-signed by the chart at install time, so it installs into any namespace.</td></tr>
-      <tr><td><code>modelpilot/sglang</code></td><td>0.7.3</td><td>1.0.0</td><td>SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection</td></tr>
-      <tr><td><code>modelpilot/vllm</code></td><td>0.4.3</td><td>1.0.0</td><td>vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection</td></tr>
+      <tr><td><code>modelsphere/bodylog</code></td><td>0.2.0</td><td>0.1.13</td><td>Body-log listener for the OpenResty router: receives full request/response frames over TCP, writes them as hourly JSONL, and serves rollups over HTTP</td></tr>
+      <tr><td><code>modelsphere/bodylog-exporter</code></td><td>0.2.0</td><td>0.2.6</td><td>Turns the body-log listener&#x27;s detail records into Prometheus metrics, and polls the router&#x27;s control-plane endpoints for live routing state</td></tr>
+      <tr><td><code>modelsphere/cart</code></td><td>0.2.2</td><td>v0.6.4</td><td>Cache-aware router: routes each request to the replica that already holds the longest matching prompt prefix, while keeping load balanced</td></tr>
+      <tr><td><code>modelsphere/openresty</code></td><td>0.2.0</td><td>0.1.20</td><td>Session-affinity router for LLM inference backends: pins a conversation to the backend that already holds its prefix cache, with active health checking, adaptive concurrency and full body logging</td></tr>
+      <tr><td><code>modelsphere/rdma-injector</code></td><td>0.2.3</td><td>0.2.0</td><td>Mutating admission webhook that spares workload manifests the RDMA boilerplate: pods labelled rdma-ib:&quot;true&quot; get the /etc/gpu-node mount and an NCCL_IB_HCA sourced from the node&#x27;s healthy InfiniBand ports injected automatically. The webhook code is baked into the image; its serving certificate is self-signed by the chart at install time, so it installs into any namespace.</td></tr>
+      <tr><td><code>modelsphere/sglang</code></td><td>0.7.3</td><td>1.0.0</td><td>SGLang inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection</td></tr>
+      <tr><td><code>modelsphere/vllm</code></td><td>0.4.3</td><td>1.0.0</td><td>vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet), with optional cache-aware routing, autoscaling and hang detection</td></tr>
     </tbody>
   </table>
   </div>
@@ -54,14 +54,14 @@ helm search repo modelpilot</code></pre>
   <p><code>sglang</code> and <code>vllm</code> pull in <code>cart</code> as a subchart,
      gated on <code>cart.enabled</code>.</p>
 
-<pre><code>helm install my-model modelpilot/sglang \
+<pre><code>helm install my-model modelsphere/sglang \
   --set model.name=my-model \
   --set model.path=/models/my-model \
   --set cart.enabled=true</code></pre>
 
   <footer>
     Source and documentation:
-    <a href="https://github.com/project-modelpilot/helm-charts">github.com/project-modelpilot/helm-charts</a>
+    <a href="https://github.com/modelsphere/helm-charts">github.com/modelsphere/helm-charts</a>
     &middot; Apache License 2.0
     &middot; The machine-readable index is at <a href="index.yaml">index.yaml</a>.
   </footer>
