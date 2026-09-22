@@ -5,9 +5,9 @@ engine itself, the cache-aware router in front of it, and the pieces that keep
 both healthy.
 
 ```bash
-helm repo add modelpilot https://project-modelpilot.github.io/helm-charts
+helm repo add modelsphere https://modelsphere.github.io/helm-charts
 helm repo update
-helm search repo modelpilot
+helm search repo modelsphere
 ```
 
 ## Charts
@@ -16,7 +16,7 @@ helm search repo modelpilot
 |---|---|
 | [`sglang`](charts/sglang) | An SGLang inference deployment — single-node or multi-node (LeaderWorkerSet) — with optional CART, autoscaling, and a hang watcher |
 | [`vllm`](charts/vllm) | The same, on vLLM |
-| [`cart`](charts/cart) | [CART](https://github.com/project-modelpilot/cache_aware_router) on its own: routes each request to the replica that already holds the longest matching prompt prefix |
+| [`cart`](charts/cart) | [CART](https://github.com/modelsphere/cache_aware_router) on its own: routes each request to the replica that already holds the longest matching prompt prefix |
 | [`rdma-injector`](charts/rdma-injector) | A mutating webhook that injects `NCCL_IB_HCA` and the node's RDMA device list into pods labelled `rdma-ib: "true"` |
 
 `sglang` and `vllm` pull in `cart` as a subchart, gated on `cart.enabled`.
@@ -26,7 +26,7 @@ about each other.
 ## Quick start
 
 ```bash
-helm install my-model modelpilot/sglang \
+helm install my-model modelsphere/sglang \
   --set model.name=my-model \
   --set model.path=/models/my-model \
   --set cart.enabled=true
@@ -48,7 +48,7 @@ cluster has no egress.
 Some optional features render custom resources that the chart does not define:
 
 - `modelRoute.enabled` needs the `ModelRoute` CRD from
-  [autoconfig](https://github.com/project-modelpilot/autoconfig)
+  [autoconfig](https://github.com/modelsphere/autoconfig)
 - `scaler.enabled` needs the `LLMScaler` CRD from the scaling operator
 
 With the CRD absent, enabling the feature fails the install with

@@ -27,14 +27,14 @@ rdma-injector/
 ## Install
 
 ```bash
-helm install rdma-injector modelpilot/rdma-injector -n kube-system
+helm install rdma-injector modelsphere/rdma-injector -n kube-system
 ```
 
 Any namespace works -- the certificate's SAN follows `Release.Namespace`:
 
 ```bash
-helm install rdma-injector modelpilot/rdma-injector -n rdma-system --create-namespace
-helm upgrade rdma-injector modelpilot/rdma-injector -n rdma-system
+helm install rdma-injector modelsphere/rdma-injector -n rdma-system --create-namespace
+helm upgrade rdma-injector modelsphere/rdma-injector -n rdma-system
 ```
 
 Then label any pod outside the webhook's own namespace with `rdma-ib: "true"`
