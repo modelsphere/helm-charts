@@ -271,10 +271,13 @@ hangWatcher:
     # /var/log/pods mount (path from the downward API, so never a neighbour's). Rotation,
     # truncation and partial lines handled; seeks to EOF on start; an unreadable log just
     # skips the fast path.
-    # On by default ONLY because readinessProbe drives /health_generate -- that is what makes
-    # the engine emit the line early enough to matter. Measured: 35s vs 42s.
+    # Off by default: the built-in detokenizer-timeout pattern also fires during benign
+    # warmup stalls (e.g. K3 serving-time Triton kernel compilation blocks the detokenizer
+    # heartbeat >20s), causing false hang verdicts that kill a healthy-but-warming engine.
+    # The other signals (stallSec, metrics timeout, active probe) still catch real hangs.
+    # Turn back on per-engine only when the log line reliably means a true wedge.
     logHang:
-      enabled: true
+      enabled: false
       # Frozen this long + a log hit = hang. MUST stay below the stallSec above -- firing
       # earlier is the whole point, and the chart fails at render time otherwise (the schema
       # only checks minimum: 1, so two equal values would look valid and silently do nothing).
