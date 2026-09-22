@@ -102,6 +102,27 @@ entries:
   openresty:
   - apiVersion: v2
     appVersion: 0.1.20
+    created: "2026-09-22T08:48:25.166050726Z"
+    description: 'Session-affinity router for LLM inference backends: pins a conversation
+      to the backend that already holds its prefix cache, with active health checking,
+      adaptive concurrency and full body logging'
+    digest: 98a00ec83202072755478916b66e70b588af35fef563afea8b33c89ccbba1089
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - openresty
+    - routing
+    - session-affinity
+    - autoconfig
+    name: openresty
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/openresty-0.2.1/openresty-0.2.1.tgz
+    version: 0.2.1
+  - apiVersion: v2
+    appVersion: 0.1.20
     created: "2026-09-21T15:24:28.479459285Z"
     description: 'Session-affinity router for LLM inference backends: pins a conversation
       to the backend that already holds its prefix cache, with active health checking,
@@ -361,4 +382,4 @@ entries:
     urls:
     - https://github.com/project-modelpilot/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-09-22T07:52:55.332311001Z"
+generated: "2026-09-22T08:48:25.16609662Z"
