@@ -50,9 +50,9 @@ PAGE = """<!doctype html>
   <h1>ModelPilot Helm Charts</h1>
   <p class="lede">Helm charts for running large language models on Kubernetes.</p>
 
-<pre><code>helm repo add modelpilot https://project-modelpilot.github.io/helm-charts
+<pre><code>helm repo add modelsphere https://modelsphere.github.io/helm-charts
 helm repo update
-helm search repo modelpilot</code></pre>
+helm search repo modelsphere</code></pre>
 
   <div class="tablewrap">
   <table>
@@ -66,14 +66,14 @@ helm search repo modelpilot</code></pre>
   <p><code>sglang</code> and <code>vllm</code> pull in <code>cart</code> as a subchart,
      gated on <code>cart.enabled</code>.</p>
 
-<pre><code>helm install my-model modelpilot/sglang \\
+<pre><code>helm install my-model modelsphere/sglang \\
   --set model.name=my-model \\
   --set model.path=/models/my-model \\
   --set cart.enabled=true</code></pre>
 
   <footer>
     Source and documentation:
-    <a href="https://github.com/project-modelpilot/helm-charts">github.com/project-modelpilot/helm-charts</a>
+    <a href="https://github.com/modelsphere/helm-charts">github.com/modelsphere/helm-charts</a>
     &middot; Apache License 2.0
     &middot; The machine-readable index is at <a href="index.yaml">index.yaml</a>.
   </footer>
@@ -82,7 +82,7 @@ helm search repo modelpilot</code></pre>
 </html>
 """
 
-ROW = ('      <tr><td><code>modelpilot/{name}</code></td><td>{version}</td>'
+ROW = ('      <tr><td><code>modelsphere/{name}</code></td><td>{version}</td>'
        '<td>{app}</td><td>{desc}</td></tr>')
 
 

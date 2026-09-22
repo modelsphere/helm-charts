@@ -1,10 +1,10 @@
 apiVersion: v2
 name: bodylog-exporter
 description: "Turns the body-log listener's detail records into Prometheus metrics, and polls the router's control-plane endpoints for live routing state"
-home: https://github.com/project-modelpilot/helm-charts
+home: https://github.com/modelsphere/helm-charts
 sources:
-  - https://github.com/project-modelpilot/helm-charts
-  - https://github.com/project-modelpilot/llm-openresty
+  - https://github.com/modelsphere/helm-charts
+  - https://github.com/modelsphere/llm-openresty
 type: application
 version: 0.2.0
 # The exporter image tag: values.image.tag is empty by default and falls back to

@@ -1,5 +1,5 @@
 # Publishes every chart whose version changed to the Helm repository served by
-# GitHub Pages at https://project-modelpilot.github.io/helm-charts
+# GitHub Pages at https://modelsphere.github.io/helm-charts
 #
 # chart-releaser packages each chart, attaches the .tgz to a GitHub Release, and
 # rewrites index.yaml on the gh-pages branch. It uses the built-in GITHUB_TOKEN,

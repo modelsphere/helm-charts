@@ -6,9 +6,9 @@ description: >-
   sourced from the node's healthy InfiniBand ports injected automatically.
   The webhook code is baked into the image; its serving certificate is
   self-signed by the chart at install time, so it installs into any namespace.
-home: https://github.com/project-modelpilot/helm-charts
+home: https://github.com/modelsphere/helm-charts
 sources:
-  - https://github.com/project-modelpilot/helm-charts
+  - https://github.com/modelsphere/helm-charts
 type: application
 version: 0.2.3
 appVersion: "0.2.0"
