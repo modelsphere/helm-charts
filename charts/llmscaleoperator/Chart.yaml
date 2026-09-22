@@ -1,0 +1,28 @@
+apiVersion: v2
+name: llmscaleoperator
+description: |
+  Kubernetes operator that autoscales LLM inference workloads on LLM-specific
+  signals -- KV-cache utilization, queue depth, TPM/capacity load -- rather than
+  CPU and memory. An HPA specialized for token serving.
+
+  Ships the LLMScaler CRD (autoscaling.4pd.io/v1alpha1) and the controller that
+  reconciles it. The SLO storage side lives in the slo-decision-gen chart; the
+  two are independent, and this one is what you need for autoscaling alone.
+
+  Generated from the llm-operator repo (dist/chart, kubebuilder helm plugin) and
+  maintained here, because this is where charts are published from.
+type: application
+
+keywords:
+  - llm
+  - autoscaling
+  - operator
+  - vllm
+  - sglang
+
+version: 0.2.1
+# appVersion names an image that EXISTS in the registry, which is not always the
+# newest version the llm-operator repo has declared. 0.3.2 is not built yet --
+# publishing a chart that points at it would hand out something that cannot be
+# installed. Bump this once the image is pushed, in its own commit.
+appVersion: "0.3.1"
