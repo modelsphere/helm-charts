@@ -562,7 +562,7 @@ cart:
 # how many replicas there are, and autoconfig keeps the routes matching whatever
 # it decides. Neither needs the other.
 modelRoute:
-  enabled: false
+  enabled: true
   # ModelRoute name; also the default openresty route (external path
   # 8080/<name>/) and the default monitor model name. Defaults to the release
   # name.
