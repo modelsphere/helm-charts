@@ -63,14 +63,6 @@ helm search repo modelsphere</code></pre>
   </table>
   </div>
 
-  <p><code>sglang</code> and <code>vllm</code> pull in <code>cart</code> as a subchart,
-     gated on <code>cart.enabled</code>.</p>
-
-<pre><code>helm install my-model modelsphere/sglang \\
-  --set model.name=my-model \\
-  --set model.path=/models/my-model \\
-  --set cart.enabled=true</code></pre>
-
   <footer>
     Source and documentation:
     <a href="https://github.com/modelsphere/helm-charts">github.com/modelsphere/helm-charts</a>
