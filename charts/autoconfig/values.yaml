@@ -1,0 +1,54 @@
+# autoconfig controller(ModelRoute)部署参数。
+image:
+  repository: 4pdosc/autoconfig
+  tag: ""                    # 缺省用 Chart.appVersion(= 发版 tag;CI 打 tag 时 sed appVersion=tag)
+                             # ⚠️ 别写死版本号:CI 只 sed Chart.yaml 的 version/appVersion、不碰本文件,
+                             # 写死会让 chart 升版后 image.tag 仍停在旧值 → 装出来的 controller 用旧镜像。
+                             # 与 openresty / cart / bodylog / monitor 的 values 保持一致。
+  pullPolicy: Always   # tag 会被 CI overwrite,Always 避免用到节点旧缓存
+
+replicas: 2            # 主备 HA:leader 选举保证只有一个在 reconcile,另一个热备,leader 挂了秒接管
+leaderElection: true   # 默认开;replicas>1 时生效(单副本时无害)
+
+resources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { cpu: 500m, memory: 256Mi }
+
+serviceAccount:
+  create: true
+  name: ""             # 空 = 用 fullname
+
+rbac:
+  create: true         # 建 ClusterRole/Binding(controller 要跨 ns 管 configmap + watch pods/endpointslices)
+
+# 可选:直接在 chart 里声明 ModelRoute(免单独 kubectl apply)。由 helm 托管:
+# helm uninstall 前随 release 删除、controller 还在 → 自动摘 finalizer,不会卡住。
+# 每项:{ name, namespace(缺省 release ns), spec: {...ModelRouteSpec...} }
+modelRoutes: []
+#  - name: glm-5.1-fp8
+#    namespace: glm
+#    spec:
+#      discovery: { service: glm-leader, port: 8050 }
+#      cart: { service: cart-glm, outputConfigMap: glm/cart-config, maxLoad: 20 }   # 底稿由 cart chart 建,autoconfig 只填 workers
+#      nginx:
+#        route: glm                       # 省略 = metadata.name
+#        outputConfigMap: openresty/openresty-conf
+#        service: openresty/openresty     # 可选:nginx 入口 → monitor nginx 行
+#        peers: [ { use: cart, priority: 1, maxConcurrency: 180 }, { use: backend, priority: 0 } ]
+
+# controller-runtime 自带指标(/metrics:reconcile 次数/耗时/错误、workqueue 深度与
+# 未完成时长、client-go 请求、Go 运行时)。卡死排查主看 workqueue_unfinished_work_seconds。
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    labels:
+      release: kube-prometheus-stack   # 本集群 Prometheus 的 serviceMonitorSelector 认这个 label,缺了不抓
+
+nameOverride: ""
+fullnameOverride: ""
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -18,6 +18,7 @@ helm search repo modelsphere
 | [`vllm`](charts/vllm) | The same, on vLLM |
 | [`cart`](charts/cart) | [CART](https://github.com/modelsphere/cache_aware_router) on its own: routes each request to the replica that already holds the longest matching prompt prefix |
 | [`llm-slo-decision-gen`](charts/llm-slo-decision-gen) | Turns SLO requirements into replica recommendations: a decision service plus the SLO storage API and its two CRDs |
+| [`autoconfig`](charts/autoconfig) | Keeps the routing layer in step with what is actually deployed: watches backends and rewrites OpenResty peers and cache-aware-router workers |
 | [`llmscaleoperator`](charts/llmscaleoperator) | The autoscaler the `sglang` and `vllm` charts hand their `LLMScaler` objects to: scales replicas on KV-cache utilization, queue depth and TPM rather than CPU |
 | [`rdma-injector`](charts/rdma-injector) | A mutating webhook that injects `NCCL_IB_HCA` and the node's RDMA device list into pods labelled `rdma-ib: "true"` |
 

@@ -1,0 +1,12 @@
+apiVersion: v2
+name: autoconfig
+description: k8s 后端发现 → 自动同步 openresty peers / cache-aware-router workers(ModelRoute controller)
+type: application
+version: 0.3.47
+# 镜像版本(values 的 image.tag 留空时回落到它)。
+# 与 chart version 同号是 autoconfig 一贯的做法,搬进本仓后保持不变。
+appVersion: "0.3.47"
+keywords: [routing, openresty, cache-aware-router, service-discovery, operator]
+home: https://github.com/modelsphere/autoconfig
+sources:
+  - https://github.com/modelsphere/autoconfig
