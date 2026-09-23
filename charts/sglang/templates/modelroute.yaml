@@ -98,9 +98,14 @@
 {{- if and $ccFromBackend (le (int $backendCC) 0) }}
 {{- fail "sglang: modelRoute.nginx.peers has a cart peer with maxConcurrencyFromBackend, which sizes CART's limit as (per-backend concurrency x backend count) -- that needs a `use: backend` peer carrying maxConcurrency > 0 as the multiplier. Add one, or drop maxConcurrencyFromBackend and set a static maxConcurrency on the cart peer" }}
 {{- end }}
-{{- if and $mr.monitor.enabled (not $mr.monitor.outputConfigMap) }}
-{{- fail "sglang: modelRoute.monitor.outputConfigMap is required when modelRoute.monitor.enabled -- it is the ConfigMap monitor reads (\"ns/name\", shared across models, one key per model)" }}
-{{- end }}
+{{- /*
+  A monitor row is written when the route says where to write it. monitor.enabled
+  defaults to true while outputConfigMap has no default and cannot be guessed, so
+  requiring both used to make a bare install fail on a value nothing had told the
+  reader to set. Treating "no target" as "not configured" keeps the release
+  installable, and a route that does name a ConfigMap still gets its row.
+*/}}
+{{- $monitorOn := and $mr.monitor.enabled $mr.monitor.outputConfigMap }}
 apiVersion: routing.gpucluster.io/v1alpha1
 kind: ModelRoute
 metadata:
@@ -176,7 +181,7 @@ spec:
   slo:
     name: {{ . | quote }}
   {{- end }}
-  {{- if $mr.monitor.enabled }}
+  {{- if $monitorOn }}
   monitor:
     outputConfigMap: {{ $mr.monitor.outputConfigMap | quote }}
     # Defaults to serviceId

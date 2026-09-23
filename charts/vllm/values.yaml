@@ -436,7 +436,7 @@ serviceMonitor:
 # workers are written into baseConfig below by hand. That means this on and
 # modelRoute.enabled off -- not a CART deployed alongside a route that ignores it.
 cart:
-  enabled: false
+  enabled: true
   # One ConfigMap, two keys: config.yaml is the chart's base (baseConfig below) and
   # workers.yaml is autoconfig's, written off the ModelRoute. The chart's template
   # never emits that key, so helm upgrade has nothing to patch there and the two stop
@@ -476,7 +476,7 @@ cart:
 # how many replicas there are, and autoconfig keeps the routes matching whatever
 # it decides. Neither needs the other.
 modelRoute:
-  enabled: false
+  enabled: true
   # ModelRoute name; also the default openresty route (external path
   # 8080/<name>/) and the default monitor model name. Defaults to the release
   # name.
@@ -598,7 +598,7 @@ modelRoute:
   # Write these backends into monitor's config as well. Monitor reloads it every
   # 60s on its own, so no sidecar is involved.
   monitor:
-    enabled: false
+    enabled: true
     # REQUIRED when enabled: monitor's ConfigMap ("ns/name"), shared across
     # models with one key per model.
     outputConfigMap: ""
