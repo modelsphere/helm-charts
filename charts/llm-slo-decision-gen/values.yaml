@@ -1,0 +1,110 @@
+# Default settings for the slo-decision-gen chart.
+
+# Both services live in one namespace. This matches the prod layout where
+# LLMScaler.customProvider.serverAddress resolves as
+# http://decision-gen.<ns>.svc:80.
+namespace: llm-scaler
+
+# ---------------------------------------------------------------------------
+# decision-gen: emits per-service replica decisions on :8080/decisions.
+# The "unstable" variant carries a different label so a ModelRoute /
+# LLMScaler can opt into the bleeding-edge decisions by choosing that
+# Service, without affecting consumers of the stable endpoint.
+# ---------------------------------------------------------------------------
+decisionGen:
+  enabled: true
+  replicas: 1
+  image:
+    repository: 4pdosc/llm-scaler-decision-gen
+    ## 0.6.0 is what exists publicly; the internal deployment pins v0.5, whose
+    ## source tag was never pushed and so cannot be reproduced from this repo.
+    tag: "0.6.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 80
+    targetPort: http
+  container:
+    port: 8080
+    name: http
+  probes:
+    liveness:
+      path: /healthz
+      initialDelaySeconds: 2
+      periodSeconds: 10
+      timeoutSeconds: 1
+      failureThreshold: 3
+    readiness:
+      path: /readyz
+      initialDelaySeconds: 2
+      periodSeconds: 10
+      timeoutSeconds: 1
+      failureThreshold: 3
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: "1"
+      memory: 256Mi
+  # Env is verbatim. No secrets required.
+  env: []
+
+  # The "unstable" variant. Existing producers read this address when they
+  # want the in-development behaviour; consumers of the stable one are
+  # unaffected.
+  unstable:
+    enabled: true
+    replicas: 1
+    env:
+      - name: LOG_LEVEL
+        value: DEBUG
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# slo-api: stores SLO configs used by rest of the platform. Holds a token
+# secret (auto-generated at install when token is empty).
+# ---------------------------------------------------------------------------
+sloApi:
+  enabled: true
+  replicas: 1
+  image:
+    repository: 4pdosc/llm-slo-api
+    tag: "v0.1"
+    pullPolicy: IfNotPresent
+  service:
+    port: 80
+    targetPort: http
+  container:
+    port: 8080
+    name: http
+  # If set, the chart writes this literal value into the Slo-Api Secret
+  # under key "token". Leave empty to let the chart generate a random one.
+  # Read the value after install with
+  #   kubectl get secret slo-api -n llm-scaler -o jsonpath='{.data.token}' | base64 -d
+  token: ""
+  probes:
+    liveness:
+      path: /healthz
+      initialDelaySeconds: 2
+      periodSeconds: 10
+      timeoutSeconds: 1
+      failureThreshold: 3
+    readiness:
+      path: /readyz
+      initialDelaySeconds: 2
+      periodSeconds: 10
+      timeoutSeconds: 1
+      failureThreshold: 3
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi

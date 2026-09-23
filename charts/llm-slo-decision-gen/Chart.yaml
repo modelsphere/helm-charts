@@ -1,0 +1,13 @@
+apiVersion: v2
+name: llm-slo-decision-gen
+description: |
+  LLM and async-job SLO stack: decision-gen (recommendation service),
+  slo-api (SLO storage API), and the LLMSLORequirement and
+  JobSLORequirement CRDs that slo-api exposes.
+
+  LLMScaler CRD and the operator that reconciles it are provided by a
+  separate chart (llmscaleoperator / llmscaleoperator-system). Deploy
+  that one first if you need autoscaling, not just SLO storage.
+type: application
+version: 0.1.1
+appVersion: "0.1.0"

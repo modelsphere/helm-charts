@@ -1,0 +1,32 @@
+slo-decision-gen ({{ .Chart.Name }}-{{ .Chart.Version }}) installed into namespace {{ include "llm-slo.namespace" . }}.
+
+Components:
+{{- if .Values.decisionGen.enabled }}
+  decision-gen (replicaCount={{ .Values.decisionGen.replicas }})            http://decision-gen.{{ include "llm-slo.namespace" . }}.svc:{{ .Values.decisionGen.service.port }}
+  {{- if .Values.decisionGen.unstable.enabled }}
+  decision-gen-unstable (replicaCount={{ .Values.decisionGen.unstable.replicas }})  http://decision-gen-unstable.{{ include "llm-slo.namespace" . }}.svc:{{ .Values.decisionGen.service.port }}
+  {{- end }}
+{{- end }}
+{{- if .Values.sloApi.enabled }}
+  slo-api (replicaCount={{ .Values.sloApi.replicas }})                  http://slo-api.{{ include "llm-slo.namespace" . }}.svc:{{ .Values.sloApi.service.port }}
+{{- end }}
+
+External dependency NOT managed by this chart:
+  The CustomResourceDefinition `llmscalers.autoscaling.4pd.io`, together with
+  the operator that reconciles it, is shipped by the separate
+  `llmscaleoperator` chart (namespace `llmscaleoperator-system`).
+  This release ships its own `llmslorequirements.inference.x-k8s.io` and
+  `jobslorequirements.inference.x-k8s.io` CRDs under crds/, plus the
+  services that expose them.
+
+  Verify with:
+    kubectl api-resources | grep -E 'llmscaler|llmslo|jobslo'
+
+  If LLMScaler is missing, install llmscaleoperator before expecting it
+  to reconcile.
+
+{{- if .Values.sloApi.enabled }}
+Token (auto-generated unless pinned via values.sloApi.token):
+  kubectl -n {{ include "llm-slo.namespace" . }} get secret slo-api \
+      -o jsonpath='{.data.token}' | base64 -d && echo
+{{- end }}
