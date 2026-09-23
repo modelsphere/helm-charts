@@ -1,5 +1,26 @@
 apiVersion: v1
 entries:
+  autoconfig:
+  - apiVersion: v2
+    appVersion: 0.3.47
+    created: "2026-09-23T08:26:46.752305609Z"
+    description: k8s 后端发现 → 自动同步 openresty peers / cache-aware-router workers(ModelRoute
+      controller)
+    digest: d13abef766d6b57b634821d3e4cc9c75b4d24cbfb7e39c630cfb34a93a3cb13f
+    home: https://github.com/modelsphere/autoconfig
+    keywords:
+    - routing
+    - openresty
+    - cache-aware-router
+    - service-discovery
+    - operator
+    name: autoconfig
+    sources:
+    - https://github.com/modelsphere/autoconfig
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/autoconfig-0.3.47/autoconfig-0.3.47.tgz
+    version: 0.3.47
   bodylog:
   - apiVersion: v2
     appVersion: 0.1.13
@@ -400,4 +421,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-09-23T06:58:46.987245272Z"
+generated: "2026-09-23T08:26:46.752346727Z"
