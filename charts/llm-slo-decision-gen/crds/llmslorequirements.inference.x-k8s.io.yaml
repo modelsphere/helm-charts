@@ -1,0 +1,223 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: llmslorequirements.inference.x-k8s.io
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  conversion:
+    strategy: None
+  group: inference.x-k8s.io
+  names:
+    kind: LLMSLORequirement
+    listKind: LLMSLORequirementList
+    plural: llmslorequirements
+    shortNames:
+    - llmslo
+    - slo
+    singular: llmslorequirement
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.minimumDeployment.value
+      name: Min_Replicas
+      type: integer
+    - jsonPath: .spec.maximumDeployment.value
+      name: Max_Replicas
+      type: integer
+    - jsonPath: .spec.priority
+      name: Priority
+      type: integer
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          spec:
+            properties:
+              maximumDeployment:
+                properties:
+                  type:
+                    default: replica
+                    enum:
+                    - replica
+                    type: string
+                  value:
+                    minimum: 1
+                    type: integer
+                type: object
+              minimumDeployment:
+                default:
+                  type: replica
+                  value: 1
+                properties:
+                  type:
+                    default: replica
+                    enum:
+                    - replica
+                    - concurrency
+                    type: string
+                  value:
+                    default: 1
+                    minimum: 1
+                    type: integer
+                type: object
+              otps:
+                description: Output Tokens Per Second (OTPS) SLO configuration.
+                properties:
+                  default:
+                    description: Default fallback metrics applied when input does
+                      not hit any specific range.
+                    properties:
+                      metrics:
+                        items:
+                          properties:
+                            threshold:
+                              format: float
+                              minimum: 0
+                              type: number
+                            type:
+                              enum:
+                              - avg
+                              - p50
+                              - p80
+                              - p90
+                              - p95
+                              - p99
+                              type: string
+                          required:
+                          - type
+                          - threshold
+                          type: object
+                        minItems: 1
+                        type: array
+                    required:
+                    - metrics
+                    type: object
+                  ranges:
+                    items:
+                      properties:
+                        contextLengthRangeHigh:
+                          minimum: 1
+                          type: integer
+                        contextLengthRangeLow:
+                          minimum: 0
+                          type: integer
+                        metrics:
+                          description: Multiple metric definitions (p50, p90, etc.)
+                            for this context range.
+                          items:
+                            properties:
+                              threshold:
+                                format: float
+                                minimum: 0
+                                type: number
+                              type:
+                                enum:
+                                - avg
+                                - p50
+                                - p80
+                                - p90
+                                - p95
+                                - p99
+                                type: string
+                            required:
+                            - type
+                            - threshold
+                            type: object
+                          minItems: 1
+                          type: array
+                      required:
+                      - contextLengthRangeLow
+                      - metrics
+                      type: object
+                    type: array
+                type: object
+              priority:
+                default: 0
+                description: Priority level from 0 to 10. Deployments with higher
+                  priority acquire nodes first.
+                maximum: 10
+                minimum: 0
+                type: integer
+              serviceId:
+                description: Identifier referencing the target service.
+                type: string
+              ttft:
+                description: Time To First Token (TTFT) SLO configuration.
+                properties:
+                  default:
+                    description: Default fallback metrics applied when input does
+                      not hit any specific range.
+                    properties:
+                      metrics:
+                        items:
+                          properties:
+                            threshold:
+                              format: float
+                              minimum: 0
+                              type: number
+                            type:
+                              enum:
+                              - avg
+                              - p50
+                              - p80
+                              - p90
+                              - p95
+                              - p99
+                              type: string
+                          required:
+                          - type
+                          - threshold
+                          type: object
+                        minItems: 1
+                        type: array
+                    required:
+                    - metrics
+                    type: object
+                  ranges:
+                    items:
+                      properties:
+                        contextLengthRangeHigh:
+                          minimum: 1
+                          type: integer
+                        contextLengthRangeLow:
+                          minimum: 0
+                          type: integer
+                        metrics:
+                          description: Multiple metric definitions (p50, p90, etc.)
+                            for this context range.
+                          items:
+                            properties:
+                              threshold:
+                                format: float
+                                minimum: 0
+                                type: number
+                              type:
+                                enum:
+                                - avg
+                                - p50
+                                - p80
+                                - p90
+                                - p95
+                                - p99
+                                type: string
+                            required:
+                            - type
+                            - threshold
+                            type: object
+                          minItems: 1
+                          type: array
+                      required:
+                      - contextLengthRangeLow
+                      - metrics
+                      type: object
+                    type: array
+                type: object
+            required:
+            - serviceId
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

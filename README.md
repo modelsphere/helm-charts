@@ -17,6 +17,7 @@ helm search repo modelsphere
 | [`sglang`](charts/sglang) | An SGLang inference deployment — single-node or multi-node (LeaderWorkerSet) — with optional CART, autoscaling, and a hang watcher |
 | [`vllm`](charts/vllm) | The same, on vLLM |
 | [`cart`](charts/cart) | [CART](https://github.com/modelsphere/cache_aware_router) on its own: routes each request to the replica that already holds the longest matching prompt prefix |
+| [`llm-slo-decision-gen`](charts/llm-slo-decision-gen) | Turns SLO requirements into replica recommendations: a decision service plus the SLO storage API and its two CRDs |
 | [`llmscaleoperator`](charts/llmscaleoperator) | The autoscaler the `sglang` and `vllm` charts hand their `LLMScaler` objects to: scales replicas on KV-cache utilization, queue depth and TPM rather than CPU |
 | [`rdma-injector`](charts/rdma-injector) | A mutating webhook that injects `NCCL_IB_HCA` and the node's RDMA device list into pods labelled `rdma-ib: "true"` |
 
