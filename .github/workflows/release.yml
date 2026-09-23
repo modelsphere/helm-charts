@@ -44,7 +44,11 @@ jobs:
 
       - name: Lint
         run: |
-          for d in charts/*/; do helm lint "$d"; done
+          # modelRoute is on by default and needs a ConfigMap name the chart cannot
+          # guess, so linting the bare defaults logs a `funcMap fail` line that reads
+          # like a failure even though lint passes. This value only satisfies that
+          # guard; no switch is overridden.
+          for d in charts/*/; do helm lint "$d" --set modelRoute.nginx.outputConfigMap=lint/openresty-conf; done
 
       - uses: helm/chart-releaser-action@v1
         with:
