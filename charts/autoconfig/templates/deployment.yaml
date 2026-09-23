@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "autoconfig.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autoconfig.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels: {{- include "autoconfig.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "autoconfig.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "autoconfig.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 15    # 配合 manager GracefulShutdownTimeout(10s),pod 及时终止
+      containers:
+        - name: controller
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- if not .Values.leaderElection }}
+          args:
+            - --leader-elect=false
+          {{- end }}
+          env:
+            - name: PS_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          # 卡死自愈:之前没有任何探针,reconcile 卡住(如 cart ConfigMap wedge)时进程还活着,
+          # k8s 不会重启、restartCount 永远 0,监控面板一路绿灯。
+          # ⚠️ healthz 是 controller-runtime 的 ping,只证明【进程存活】,发现不了 reconcile 卡死;
+          #    真要抓卡死看下面 metrics 端口暴露的 workqueue_unfinished_work_seconds。
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- else }}
+      # 主备默认软反亲和:两副本尽量分散到不同节点(节点挂不会两个一起没);单节点集群不阻塞调度。
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {{- include "autoconfig.selectorLabels" . | nindent 20 }}
+      {{- end }}

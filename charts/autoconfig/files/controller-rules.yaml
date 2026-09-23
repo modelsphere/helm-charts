@@ -1,0 +1,89 @@
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - services
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - inference.x-k8s.io
+  resources:
+  - llmslorequirements
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - routing.gpucluster.io
+  resources:
+  - modelroutes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - routing.gpucluster.io
+  resources:
+  - modelroutes/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - routing.gpucluster.io
+  resources:
+  - modelroutes/status
+  verbs:
+  - get
+  - patch
+  - update

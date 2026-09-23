@@ -1,0 +1,34 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "autoconfig.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "autoconfig.labels" . | nindent 4 }}
+{{- end }}
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "autoconfig.clusterRoleName" . }}
+  labels: {{- include "autoconfig.labels" . | nindent 4 }}
+# rules 由 `make manifests` 从 kubebuilder marker 生成的 config/rbac/role.yaml 抽出到 files/controller-rules.yaml,
+# 这里直接引入 —— 权限只在 controller.go 的 +kubebuilder:rbac marker 改,不再手抄。
+rules:
+{{ .Files.Get "files/controller-rules.yaml" }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "autoconfig.clusterRoleName" . }}
+  labels: {{- include "autoconfig.labels" . | nindent 4 }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "autoconfig.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "autoconfig.clusterRoleName" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
