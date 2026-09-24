@@ -16,9 +16,9 @@ decisionGen:
   replicas: 1
   image:
     repository: 4pdosc/llm-scaler-decision-gen
-    ## 0.6.0 is what exists publicly; the internal deployment pins v0.5, whose
-    ## source tag was never pushed and so cannot be reproduced from this repo.
-    tag: "0.6.0"
+    ## 0.7.0 is the first release that reads LLMSLORequirement from
+    ## inference.modelsphere.dev; earlier tags read the old group.
+    tag: "0.7.0"
     pullPolicy: IfNotPresent
   service:
     port: 80
@@ -74,6 +74,8 @@ sloApi:
   # Off by default: slo-api is an optional HTTP/UI front end for editing
   # LLMSLORequirement specs by route; nothing else in the stack calls it.
   # Set to true if you want it.
+  # Not usable with this chart yet: the published image (v0.1) still looks for
+  # LLMSLORequirement under the old API group, so it would find nothing.
   enabled: false
   replicas: 1
   image:

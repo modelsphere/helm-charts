@@ -1,6 +1,6 @@
 {{- if .Values.scaler.enabled -}}
 {{/*
-  LLMScaler (autoscaling.4pd.io/v1alpha1). The CRD offers two mutually exclusive
+  LLMScaler (autoscaling.modelsphere.dev/v1alpha1). The CRD offers two mutually exclusive
   signal sources, and metricProvider picks which:
 
     Prometheus (default) -- spec.metrics are PromQL queries evaluated against
@@ -52,7 +52,7 @@
        operator falls back to its newest-pod-first heuristic whatever this says. */}}
 {{- $sd := $s.scaleDown | default dict }}
 {{- $sdCost := and (not $custom) $sd.deletionCostQuery }}
-apiVersion: autoscaling.4pd.io/v1alpha1
+apiVersion: autoscaling.modelsphere.dev/v1alpha1
 kind: LLMScaler
 metadata:
   name: {{ include "sglang.fullname" . }}

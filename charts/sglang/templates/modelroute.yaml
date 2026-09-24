@@ -106,7 +106,7 @@
   installable, and a route that does name a ConfigMap still gets its row.
 */}}
 {{- $monitorOn := and $mr.monitor.enabled $mr.monitor.outputConfigMap }}
-apiVersion: routing.gpucluster.io/v1alpha1
+apiVersion: routing.modelsphere.dev/v1alpha1
 kind: ModelRoute
 metadata:
   name: {{ $mr.name | default .Release.Name }}
@@ -118,7 +118,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   finalizers:
-    - routing.gpucluster.io/cleanup
+    - routing.modelsphere.dev/cleanup
 spec:
   # The backend bucket: what feeds CART's workers, nginx's backend peers and
   # monitor's service rows. Always this release's own Service, so a scale event

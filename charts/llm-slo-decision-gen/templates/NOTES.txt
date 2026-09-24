@@ -12,11 +12,11 @@ Components:
 {{- end }}
 
 External dependency NOT managed by this chart:
-  The CustomResourceDefinition `llmscalers.autoscaling.4pd.io`, together with
+  The CustomResourceDefinition `llmscalers.autoscaling.modelsphere.dev`, together with
   the operator that reconciles it, is shipped by the separate
   `llmscaleoperator` chart (namespace `llmscaleoperator-system`).
-  This release ships its own `llmslorequirements.inference.x-k8s.io` and
-  `jobslorequirements.inference.x-k8s.io` CRDs under crds/, plus the
+  This release ships its own `llmslorequirements.inference.modelsphere.dev` and
+  `jobslorequirements.inference.modelsphere.dev` CRDs under crds/, plus the
   services that expose them.
 
   Verify with:

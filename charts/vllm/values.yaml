@@ -360,7 +360,7 @@ scaler:
     # Example (scoped to this deployment via __SCOPE__):
     #   deletionCostQuery: 'vllm:kv_cache_usage_perc{__SCOPE__} * 100'
 
-# An LLMSLORequirement (inference.x-k8s.io/v1alpha1) filed for this service: the
+# An LLMSLORequirement (inference.modelsphere.dev/v1alpha1) filed for this service: the
 # latency targets the platform holds it to. modelRoute.slo below points openresty
 # at this same object, so the route's limits come from it instead of the static
 # ttft_limit_ms / tps_limit_tps.
@@ -465,7 +465,7 @@ cart:
   # affinity: {}
 
 # Publish this deployment to autoconfig as a ModelRoute
-# (routing.gpucluster.io/v1alpha1), so openresty's peers and the CART workers
+# (routing.modelsphere.dev/v1alpha1), so openresty's peers and the CART workers
 # follow the pods instead of being maintained by hand.
 #
 # Requires the ModelRoute CRD, which ships with the autoconfig chart. With it

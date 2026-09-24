@@ -68,7 +68,7 @@ openrestyPoll:
 # no operator installed, set openrestyPoll.routes instead.
 routeDiscovery:
   enabled: true
-  apiGroup: routing.gpucluster.io
+  apiGroup: routing.modelsphere.dev
   version: v1alpha1
   plural: modelroutes
   intervalSeconds: 30
