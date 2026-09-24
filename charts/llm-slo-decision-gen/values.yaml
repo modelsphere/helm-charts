@@ -71,7 +71,10 @@ decisionGen:
 # secret (auto-generated at install when token is empty).
 # ---------------------------------------------------------------------------
 sloApi:
-  enabled: true
+  # Off by default: slo-api is an optional HTTP/UI front end for editing
+  # LLMSLORequirement specs by route; nothing else in the stack calls it.
+  # Set to true if you want it.
+  enabled: false
   replicas: 1
   image:
     repository: 4pdosc/llm-slo-api
