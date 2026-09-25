@@ -1,0 +1,31 @@
+# A chart published before its images exist hands out an install that cannot pull.
+# Merging to main publishes immediately (release.yml), so the check runs here, on the
+# pull request: every chart whose version moves must name only images that exist.
+# See hack/check-chart-images.sh.
+name: check-chart-images
+
+on:
+  pull_request:
+    paths: ['charts/**', 'hack/check-chart-images.sh', '.github/workflows/check-images.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  images-exist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the base branch is needed to tell which chart versions moved
+
+      - uses: azure/setup-helm@v4
+
+      - name: Install crane
+        run: |
+          curl -sSfL https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin crane
+          crane version
+
+      - name: Every image a released chart asks for exists
+        run: hack/check-chart-images.sh "origin/${{ github.base_ref }}"

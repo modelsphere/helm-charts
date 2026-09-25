@@ -50,6 +50,27 @@ jobs:
           # guard; no switch is overridden.
           for d in charts/*/; do helm lint "$d" --set modelRoute.nginx.outputConfigMap=lint/openresty-conf; done
 
+      # The same check the pull request ran (check-images.yml), once more right before
+      # publishing: a direct push to main skips the pull request, and publishing a chart
+      # whose images do not exist is the thing this repository must not do.
+      - name: Install crane
+        run: |
+          curl -sSfL https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin crane
+          crane version
+
+      - name: Every image a released chart asks for exists
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # A push compares with the commit before it; a manual run has none, so it
+          # checks every chart.
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            hack/check-chart-images.sh "$BEFORE"
+          else
+            hack/check-chart-images.sh --all
+          fi
+
       - uses: helm/chart-releaser-action@v1
         with:
           # A chart can change without its version moving -- a comment reworded,
