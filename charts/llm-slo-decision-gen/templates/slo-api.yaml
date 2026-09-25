@@ -18,11 +18,11 @@ rules:
   # slo-api stores SLO configs but does not own CR lifecycle: the operator
   # creates/deletes CRs and writes /status. slo-api only reads + patches
   # existing ones in place.
-  - apiGroups: ["inference.x-k8s.io"]
+  - apiGroups: ["inference.modelsphere.dev"]
     resources: ["llmslorequirements"]
     verbs: ["get", "list", "watch", "patch", "update"]
   # Same contract for async-job SLOs.
-  - apiGroups: ["inference.x-k8s.io"]
+  - apiGroups: ["inference.modelsphere.dev"]
     resources: ["jobslorequirements"]
     verbs: ["get", "list", "watch", "patch", "update"]
 ---

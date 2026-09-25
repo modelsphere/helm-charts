@@ -19,11 +19,11 @@ rules:
   # decision_gen's code doesn't exercise. pod/service/endpoint/replicaset
   # reads were removed after k8s_state gained placement-based lookups.
   # Reads SLO definitions; never writes status.
-  - apiGroups: ["inference.x-k8s.io"]
+  - apiGroups: ["inference.modelsphere.dev"]
     resources: ["llmslorequirements"]
     verbs: ["get", "list", "watch"]
   # Same for async-job SLOs.
-  - apiGroups: ["inference.x-k8s.io"]
+  - apiGroups: ["inference.modelsphere.dev"]
     resources: ["jobslorequirements"]
     verbs: ["get", "list", "watch"]
   # pool_capacity() enumerates GPU nodes.
