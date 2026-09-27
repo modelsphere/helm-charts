@@ -27,7 +27,7 @@ ha:
   # It is a regular container in the pod, not an init container: if the image
   # cannot be pulled, the whole pod stays down. Override it alongside the others
   # when pulling from your own registry.
-  image: 4pdosc/autoconfig-hagate:0.3.31
+  image: 4pdosc/autoconfig-hagate:0.4.0
   port: 8081
   appTcp: "127.0.0.1:8071"
 
@@ -89,7 +89,7 @@ reload:
   enabled: true
   # As with ha.image: built from autoconfig, versioned with it. Watches the
   # mounted ConfigMap and sends SIGHUP to CART when it changes.
-  image: 4pdosc/autoconfig-reload:0.3.31
+  image: 4pdosc/autoconfig-reload:0.4.0
   process: "cache-aware-router"
 
 service:

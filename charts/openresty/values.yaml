@@ -18,7 +18,7 @@ ha:
   enabled: true
   # Built from the autoconfig project, not from this router, so its version
   # tracks autoconfig's releases rather than this chart's appVersion.
-  image: 4pdosc/autoconfig-hagate:0.3.31
+  image: 4pdosc/autoconfig-hagate:0.4.0
   port: 8081
   # Watches the fixed admin port rather than a route port, which comes and goes
   # with configuration: nginx answering on 8090 is what "really alive" means.
@@ -70,7 +70,7 @@ initialRoutes: {}          # session_route_<route>.conf entries as filename: con
 # autoconfig 0.3.46.
 reload:
   enabled: true
-  image: 4pdosc/autoconfig-reload:0.3.46
+  image: 4pdosc/autoconfig-reload:0.4.0
   process: "nginx: master"
 
 service:
