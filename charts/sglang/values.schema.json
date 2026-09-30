@@ -451,6 +451,18 @@
     },
 
     "env": { "type": "array" },
+  "cache": {
+      "description": "Host-level compile cache management (everything under SGLANG_CACHE_DIR, plus HF_HOME). Provides template-hash isolation, per-node slot leasing via kernel flock, warm reuse, and automatic garbage collection.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "hostPath": { "type": "string" },
+        "hostPathSuffix": { "type": "string" },
+        "historyLimit": { "type": "integer", "minimum": 1 },
+        "maxSlotsPerNode": { "type": "integer", "minimum": 1, "maximum": 64 }
+      }
+    },
     "volumes": { "type": "array" },
     "volumeMounts": { "type": "array" },
     "tolerations": { "type": "array" },
