@@ -972,6 +972,20 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/sglang-0.7.0/sglang-0.7.0.tgz
     version: 0.7.0
+  swiss:
+  - apiVersion: v2
+    appVersion: 0.6.3
+    created: "2026-10-08T15:57:15.976823816Z"
+    description: 'swissd -- the Swiss deploy control plane for the sglang and vllm
+      charts. One instance per cluster, running inside the cluster it manages: it
+      reads the model catalog over HTTP, reads this cluster''s releases and nodes
+      through its own ServiceAccount, and serves the web UI embedded in its binary.'
+    digest: 47367cc0df9e144e56fa6e8fc5f3e59b9d4457f3a4924a9e7123b27a8dc24dcf
+    name: swiss
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/swiss-0.6.3/swiss-0.6.3.tgz
+    version: 0.6.3
   vllm:
   - apiVersion: v2
     appVersion: 1.0.0
@@ -1277,4 +1291,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-10-08T15:04:29.709699247Z"
+generated: "2026-10-08T15:57:15.97692165Z"
