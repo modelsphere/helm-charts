@@ -204,24 +204,60 @@ spec:
       {{- with $root.Values.volumes }}
       {{- toYaml . | nindent 6 }}
       {{- end }}
-      {{- /* Router scheduling: inherits the engines' by default; the *Replace
-             fields swap a block wholesale. Pod-level, not per-role. */}}
-      {{- $raff := $root.Values.affinity }}
+      {{- /* Router scheduling: pin to THIS slice's prefill leader, on the same
+             node.
+
+             Why pin at all: the router mounts the model hostPath (hostPath is
+             node-local) and only the nodes engines actually landed on are
+             known to have it. Inheriting the engines' nodeAffinity would be
+             both redundant (wherever prefill scheduled satisfies it by
+             construction) and weaker (any allowed node, not one with the
+             weights). Required podAffinity on the prefill group leader is the
+             one selector that proves the model is in place -- prefill's
+             model-check init ran there.
+
+             Schedule-time only: a live router does not chase a rescheduled
+             prefill, and does not need to -- the mount still serves and the
+             upstreams move over cluster net. If the NODE dies the replacement
+             router pod re-resolves the selector wherever prefill landed.
+
+             The selector is the same four labels the per-slice headless
+             Service uses (pd-ds.yaml); worker-index=0 because only the group
+             leader serves HTTP and hosts the bootstrap port the router needs.
+             startupPolicy=LeaderCreated means the leader pod always exists
+             first, so this pins without deadlock. */ -}}
+      {{- $raff := dict "podAffinity" (dict "requiredDuringSchedulingIgnoredDuringExecution" (list (dict
+           "labelSelector" (dict "matchLabels" (dict
+             "disaggregatedset.x-k8s.io/name" $fullname
+             "disaggregatedset.x-k8s.io/role" "prefill"
+             "disaggregatedset.x-k8s.io/slice" (printf "%d" $s)
+             "leaderworkerset.sigs.k8s.io/worker-index" "0"))
+           "topologyKey" "kubernetes.io/hostname"))) -}}
       {{- if not (kindIs "invalid" $pd.router.affinityReplace) }}{{ if $pd.router.affinityReplace }}{{ $raff = $pd.router.affinityReplace }}{{ end }}
       {{- end }}
       {{- with $raff }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- $rtol := $root.Values.tolerations }}
+      {{- /* Tolerations: inherit the user's top-level list AND the engine
+             pod's nvidia.com/gpu NoSchedule auto-add (_pod.tpl, same
+             construction). Once podAffinity pins the router to a GPU node the
+             toleration stops being optional -- without it the router pends
+             against its own affinity. A user entry for the same key wins, so
+             narrowing (tolerate one value only) still works. A null
+             tolerationsReplace hands the whole block to the user. */ -}}
+      {{- $rtol := default (list) $root.Values.tolerations }}
+      {{- $rtolHasGpu := false }}
+      {{- range $rtol }}
+      {{- if eq (.key | default "") "nvidia.com/gpu" }}{{- $rtolHasGpu = true }}{{- end }}
+      {{- end }}
+      {{- if not $rtolHasGpu }}
+      {{- $rtol = concat (list (dict "key" "nvidia.com/gpu" "operator" "Exists" "effect" "NoSchedule")) $rtol }}
+      {{- end }}
       {{- if not (kindIs "invalid" $pd.router.tolerationsReplace) }}{{ if $pd.router.tolerationsReplace }}{{ $rtol = $pd.router.tolerationsReplace }}{{ end }}
       {{- end }}
       {{- with $rtol }}
       tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with $root.Values.nodeSelector }}
-      nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 {{- end }}
