@@ -211,9 +211,15 @@ pd:
       tag: ""
     # The router always gets a copy of the model mounted read-only at
     # model.mountPath (as /model for the tokenizer's HF lookup, the path
-    # cache_aware's prefix-hashing needs) and inherits the engines'
-    # scheduling by default. The *Replace fields fully swap the top-level
-    # blocks rather than merge.
+    # cache_aware's prefix-hashing needs). Its default scheduling is
+    # pinned: required podAffinity to THIS slice's prefill group-leader on
+    # the same node (the only selector that proves the hostPath-resident
+    # weights are actually there, because prefill's model-check ran on that
+    # node), plus the user's top-level tolerations with the same
+    # nvidia.com/gpu NoSchedule auto-add the engine pod gets -- without it
+    # the router would pend against its own affinity. The *Replace fields
+    # fully swap their blocks rather than merge: set them to run the
+    # router on a separate LB tier instead of on the prefill node.
     affinityReplace: null
     tolerationsReplace: null
 
