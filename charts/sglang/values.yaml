@@ -120,6 +120,16 @@ lws:
 # three http ports are not pairwise distinct; the bootstrap pair diverges by
 # default (8998/8999) so colocate needs nothing special.
 #
+# Readiness chain. Engine pod readiness (prefill + decode each probe their
+# own /health_generate) is enforced first; the router container in BOTH
+# shapes then carries an exec probe that curls each engine's /health (the
+# cheap shallow endpoint) and passes only when BOTH roles have a reachable
+# upstream -- which is when the front door should open. Before this lands
+# a router could enter the EndpointSlice as soon as its port opened and
+# CART would 5xx user requests during engine load. Single / LWS shapes
+# have no router at all; there the engine readiness IS the front door
+# and nothing here changes.
+#
 # extraArgs ordering for engines is chart-derived flags, then top-level
 # extraArgs, then pd.<role>.extraArgs, LAST occurrence of a repeated flag
 # winning. So role flags override the shared ones by construction: a common
@@ -222,6 +232,30 @@ pd:
     # router on a separate LB tier instead of on the prefill node.
     affinityReplace: null
     tolerationsReplace: null
+    # Readiness. In both pd shapes the router container carries an exec
+    # startupProbe (180x30s = 90 minutes, matching the engines' load
+    # budget) + readinessProbe (30x5x3) that curls the engines' own
+    # /health -- prefill AND decode, direct, never through the router's
+    # own port. Only when both roles answer does the router read Ready,
+    # join the EndpointSlice and let traffic through. Without it the
+    # router would land in the Service as soon as its port opened --
+    # before any engine exists -- and CART would 5xx user requests
+    # instead of waiting.
+    #
+    # The endpoint is /health (cheap, ~3ms once up, ~0 during load)
+    # not /health_generate: the deep signal is already owned by the
+    # engines' own readinessProbe and hang-watcher, and stacking a
+    # router copy on top would halve scheduler capacity for no signal.
+    #
+    # Caveats this probe cannot close:
+    #  - after engines are Ready, a wedged scheduler still 200s
+    #    /health from cached frontend state; hang-watcher owns that
+    #    failure mode.
+    #  - the headless Services publish not-ready addresses, so the
+    #    resolve step finds engines that are loading -- the /health
+    #    call itself is what gates "load finished".
+    #  - if an engine pod restarts with a new IP, the router keeps
+    #    stale argv; staleness self-healing is a separate PR.
 
 image:
   repository: "lmsysorg/sglang"

@@ -114,6 +114,14 @@ spec:
             --model-path {{ $root.Values.model.mountPath }} \
             --host 0.0.0.0 \
             --port {{ $root.Values.service.port }}
+        {{- /* Same readiness chain as the A/B router; hosts are loopback
+               because the engines share this pod's netns. The pod is Ready
+               only when prefill AND decode each answer /health AND this
+               router is running -- the Service's front door opens then,
+               not earlier. See sglang.pdRouterProbes. */ -}}
+        {{- include "sglang.pdRouterProbes" (dict "roles" (dict
+             "prefill" (dict "host" "127.0.0.1" "port" ($pd.prefill.httpPort | default 30001))
+             "decode"  (dict "host" "127.0.0.1" "port" ($pd.decode.httpPort  | default 30002)))) | nindent 8 }}
         # Port name is router-http, NOT http: the prefill engine in this same
         # pod already names its port http (and decode http1), and the API server
         # warns on a duplicate name within one pod. The front-door Service
