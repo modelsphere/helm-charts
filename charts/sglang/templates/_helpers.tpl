@@ -72,6 +72,55 @@
 {{- end -}}
 
 {{/*
+  The per-model directory under cache.hostPath, and the default for
+  cache.hostPathSuffix -- so every release serving one model shares its warm
+  kernels on a node, instead of each install compiling its own copy.
+
+  model.name can be a HF repo id, so "/" and ":" fold to "--" rather than
+  turning one name into nested directories.
+*/}}
+{{- define "sglang.cacheModelDir" -}}
+{{- .Values.model.name | replace "/" "--" | replace ":" "--" -}}
+{{- end -}}
+
+{{/*
+  Template hash for cache isolation. Evaluates all inputs that define compiled kernel compatibility:
+  image repo & tag, model name, context length, extraArgs, and compiler-relevant environment variables.
+*/}}
+{{- define "sglang.cacheTemplateHash" -}}
+{{- $envList := list -}}
+{{- range .Values.env -}}
+  {{- $envList = append $envList (printf "%s=%s" .name (.value | default "")) -}}
+{{- end -}}
+{{- $inputs := list
+      .Values.image.repository
+      .Values.image.tag
+      .Values.model.name
+      .Values.model.contextLength
+      .Values.extraArgs
+      $envList
+    | toJson -}}
+{{- sha256sum $inputs | trunc 10 -}}
+{{- end -}}
+
+{{/*
+  Container HOME that wire_cache() resolves via expanduser("~"). Chart-visible
+  only: an explicit env HOME value wins; otherwise /root, matching the chart's
+  default empty securityContext (image user, uid 0 → /root on the SGLang
+  images this chart targets). A non-root runAsUser without env HOME is refused
+  by the collision guard in _pod.tpl — passwd home is unknowable at render time.
+*/}}
+{{- define "sglang.cacheHome" -}}
+{{- $home := "/root" -}}
+{{- range .Values.env -}}
+{{- if and (eq .name "HOME") (hasKey . "value") (ne (toString .value) "") -}}
+{{- $home = trimSuffix "/" (toString .value) -}}
+{{- end -}}
+{{- end -}}
+{{- $home -}}
+{{- end -}}
+
+{{/*
   The labels every engine pod carries on top of the chart's own (app, role):
   podLabels, plus rdma-ib: "true" when rdma.enabled under lws.enabled -- the
   label rdma-injector keys off. A podLabels entry of the same name wins, so a hand-written one is

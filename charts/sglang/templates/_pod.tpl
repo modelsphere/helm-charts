@@ -76,10 +76,16 @@
 {{- $hwPort := add (int $root.Values.hangWatcher.port) $hwOffset }}
 {{- $pobj := ternary $root.Values.pd.decode $root.Values.pd.prefill (hasPrefix "decode-" $role) }}
 {{- $httpPort := ternary ($pobj.httpPort | default $root.Values.service.port) $root.Values.service.port $pdRole }}
+{{- $preStop := $root.Values.lifecycle.preStop }}
+{{- $cache := $root.Values.cache | default dict }}
 {{- /* Defined -- including as [] -- takes the container over, and nothing below
        is built. [] renders no command at all: the image's ENTRYPOINT. */}}
 {{- $cmd := $root.Values.commandOverride }}
 {{- $override := not (kindIs "invalid" $cmd) }}
+{{- $cacheEnabled := and ($cache.enabled | default false) (not $override) }}
+{{- $cacheSuffix := ternary $cache.hostPathSuffix (include "sglang.cacheModelDir" $root) (not (kindIs "invalid" $cache.hostPathSuffix)) }}
+{{- $cacheBaseHostPath := $cache.hostPath | default "/mnt/disk0/sglang-cache" | trimSuffix "/" }}
+{{- $cacheFullHostPath := ternary (printf "%s/%s" $cacheBaseHostPath $cacheSuffix) $cacheBaseHostPath (ne (toString $cacheSuffix) "") }}
 {{- /* Empty means no model volume: no hostPath, no mount. */}}
 {{- $hasModel := ne (toString ($root.Values.model.localPath | default "")) "" }}
 {{- if and $override $root.Values.extraArgs }}
@@ -87,6 +93,42 @@
 {{- end }}
 {{- if and (not $override) (not $hasModel) }}
 {{- fail "sglang: model.localPath is empty while the chart is still building SGLang's command line, and SGLang cannot start without --model-path. Set commandOverride to run a non-SGLang image, or point model.localPath at the weights" }}
+{{- end }}
+{{- /* The cache manager replaces ~/.cache/sglang with a symlink to the slot it
+       leases (wire_cache uses expanduser("~")), so a volume mounted there --
+       and only there -- would collide. A mount on ~/.cache itself is fine: the
+       symlink is made inside it.
+
+       Resolve ~ the same way the chart can see it: env HOME if set, else /root
+       (empty securityContext → image root). Non-root runAsUser without HOME is
+       refused so this guard cannot silently check the wrong path. */}}
+{{- if $cacheEnabled }}
+{{- $homeFromEnv := false }}
+{{- $homeFromValueFrom := false }}
+{{- range $root.Values.env }}
+{{- if eq .name "HOME" }}
+{{- if and (hasKey . "value") (ne (toString .value) "") }}
+{{- $homeFromEnv = true }}
+{{- else if hasKey . "valueFrom" }}
+{{- $homeFromValueFrom = true }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $sc := $root.Values.securityContext | default dict }}
+{{- $nonRoot := and (hasKey $sc "runAsUser") (ne (int $sc.runAsUser) 0) }}
+{{- if and $nonRoot (not $homeFromEnv) }}
+{{- fail "sglang: cache.enabled with securityContext.runAsUser != 0 requires env HOME (a plain value, not valueFrom) so the managed-cache collision check matches wire_cache's expanduser(\"~\"); set env HOME to the container home, or run as root" }}
+{{- end }}
+{{- if $homeFromValueFrom }}
+{{- fail "sglang: cache.enabled cannot resolve env HOME from valueFrom at render time; set HOME to a plain value so the managed-cache collision check matches wire_cache's expanduser(\"~\")" }}
+{{- end }}
+{{- $cacheLink := printf "%s/.cache/sglang" (include "sglang.cacheHome" $root) }}
+{{- range $vm := $root.Values.volumeMounts }}
+{{- $mp := clean (toString $vm.mountPath) }}
+{{- if or (eq $mp $cacheLink) (hasPrefix (printf "%s/" $cacheLink) $mp) }}
+{{- fail (printf "sglang: cache.enabled is true, but volumeMounts carries a mount at %s (volume %q). That path (%s) is where the managed cache symlinks the host slot it leases; remove the manual volumeMount, or turn cache.enabled off and manage the directory yourself" $vm.mountPath ($vm.name | default "unnamed") $cacheLink) }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- /*
   The engine command line, built once so both command forms say the same thing. Skipped entirely under commandOverride.
@@ -176,7 +218,11 @@
       "hasModel" $hasModel
       "override" $override
       "expand" $expand
-      "flags" $flags) -}}
+      "flags" $flags
+      "cacheEnabled" $cacheEnabled
+      "cacheSuffix" $cacheSuffix
+      "cacheBaseHostPath" $cacheBaseHostPath
+      "cacheFullHostPath" $cacheFullHostPath) -}}
 {{- end -}}
 
 {{/*
@@ -207,6 +253,12 @@
 {{- $expand := $e.expand }}
 {{- $flags := $e.flags }}
 {{- $preStop := $root.Values.lifecycle.preStop }}
+{{- /* Host-level compile-cache management (see cache in values.yaml): when
+       enabled, the engine command is wrapped in cache_manager.py, which leases
+       a per-node slot and symlinks ~/.cache/sglang at it. Disabled under
+       commandOverride, which owns the command line. */}}
+{{- $cache := $root.Values.cache | default dict }}
+{{- $cacheEnabled := and ($cache.enabled | default false) (not $override) }}
 {{- /* /dev/shm: the chart mounts one unless the values already do. A user who
        mounts /dev/shm through volumeMounts keeps ownership of it -- emitting
        the chart's as well would put two mounts on the same path and the pod
@@ -251,10 +303,20 @@
       # the same answer; the flag below expands the env it is exported into.
       export MOONCAKE_IB_DEVICE="${NCCL_IB_HCA}"
       {{- end }}
+      {{- if $cacheEnabled }}
+      exec python3 /opt/sglang-cache/cache_manager.py -- \
+        sglang serve{{ range $flags }} \
+          {{ if has . $expand }}"{{ . }}"{{ else }}'{{ replace "'" "'\\''" . }}'{{ end }}{{ end }}
+      {{- else }}
       exec sglang serve{{ range $flags }} \
         {{ if has . $expand }}"{{ . }}"{{ else }}'{{ replace "'" "'\\''" . }}'{{ end }}{{ end }}
+      {{- end }}
+  {{- else }}
+  {{- if $cacheEnabled }}
+  command: ["python3", "/opt/sglang-cache/cache_manager.py", "--", "sglang", "serve"]
   {{- else }}
   command: ["sglang", "serve"]
+  {{- end }}
   args:
     {{- range $flags }}
     - {{ . | quote }}
@@ -278,6 +340,18 @@
       value: "1"
     - name: SGL_FORCE_SHUTDOWN
       value: "1"
+    {{- end }}
+    {{- if $cacheEnabled }}
+    # The engine command runs under cache_manager.py (see the command forms
+    # above); these tune the host-side slot pool it manages.
+    - name: SGLANG_CACHE_HOST_DIR
+      value: "/var/cache/sglang-host"
+    - name: SGLANG_CACHE_TEMPLATE_HASH
+      value: {{ include "sglang.cacheTemplateHash" $root | quote }}
+    - name: SGLANG_CACHE_MAX_SLOTS
+      value: {{ $cache.maxSlotsPerNode | default 8 | quote }}
+    - name: SGLANG_CACHE_HISTORY_LIMIT
+      value: {{ $cache.historyLimit | default 2 | quote }}
     {{- end }}
     {{- with $root.Values.env }}
     {{- toYaml . | nindent 4 }}
@@ -303,11 +377,20 @@
   securityContext:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- if or $hasModel $root.Values.volumeMounts $shmOn }}
+  {{- if or $hasModel $cacheEnabled $root.Values.volumeMounts $shmOn }}
   volumeMounts:
   {{- if $hasModel }}
   - name: model-storage
     mountPath: {{ $root.Values.model.mountPath }}
+    readOnly: true
+  {{- end }}
+  {{- if $cacheEnabled }}
+  # The hostPath below carries the slot pool the cache manager leases from
+  # (podSpec volumes); the configMap carries cache_manager.py itself.
+  - name: host-cache
+    mountPath: /var/cache/sglang-host
+  - name: cache-manager-script
+    mountPath: /opt/sglang-cache
     readOnly: true
   {{- end }}
   {{- if $shmOn }}
@@ -543,6 +626,8 @@
 {{- $httpPort := $e.httpPort }}
 {{- $hasModel := $e.hasModel }}
 {{- $override := $e.override }}
+{{- $cacheEnabled := $e.cacheEnabled }}
+{{- $cacheFullHostPath := $e.cacheFullHostPath }}
 {{- $preStop := $root.Values.lifecycle.preStop }}
 {{- /* Shutdown budget: preStop + SGLang's post-SIGTERM drain, checked by
        sglang.shutdownBudget. Workers get their own, because they drain nothing
@@ -635,7 +720,7 @@ initContainers:
 containers:
 {{- include "sglang.engineContainers" (dict "root" $root "role" .role "roleCfg" (.roleCfg | default dict) "colocate" false) }}
 {{- $hangVol := and $root.Values.hangWatcher.enabled $serves }}
-{{- if or $hasModel $hangVol $root.Values.volumes $shmOn }}
+{{- if or $hasModel $hangVol $cacheEnabled $root.Values.volumes $shmOn }}
 volumes:
 {{- if $shmOn }}
 - name: dshm
@@ -648,6 +733,16 @@ volumes:
   hostPath:
     path: {{ $root.Values.model.localPath }}
     type: {{ $root.Values.model.hostPathType }}
+{{- end }}
+{{- if $cacheEnabled }}
+- name: host-cache
+  hostPath:
+    path: {{ $cacheFullHostPath }}
+    type: DirectoryOrCreate
+- name: cache-manager-script
+  configMap:
+    name: {{ include "sglang.fullname" $root }}-cache-manager
+    defaultMode: 0755
 {{- end }}
 {{- if $hangVol }}
 - name: hang-watcher-config
