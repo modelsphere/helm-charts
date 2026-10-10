@@ -40,6 +40,51 @@
         { "type": "integer", "minimum": 0 },
         { "type": "string", "pattern": "^([0-9]+%?)?$" }
       ]
+    },
+
+    "pdRole": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 0 },
+        "size": { "type": "integer", "minimum": 1 },
+        "httpPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "distPort": {
+          "description": "Quoted in values.yaml; empty means inherit lws.distPort. A/B + size >= 2 only: the rendezvous port for --master-port inside this role's group. Colocate and size-1 roles never render --master-addr/--master-port, so it is a no-op there.",
+          "type": ["string", "integer"]
+        },
+        "gpus": {
+          "description": "Quoted in values.yaml. Empty falls back to top-level model.gpus. 0/\"0\" means no GPU claim (a deliberate override, not a fallback).",
+          "type": ["string", "integer"]
+        },
+        "nixl": {
+          "description": "NixlConnector parameters. The chart derives --kv-transfer-config from these (kv_role=kv_both), no role-name is needed -- prefill/decode is decided by which side the router pairs.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sideChannelPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "httpPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "backends": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1
+            }
+          }
+        },
+        "extraArgs": {
+          "description": "Appended after the top-level extraArgs for this role's engines; a repeated flag's last occurrence wins, so role flags override shared ones by construction.",
+          "type": "array",
+          "items": { "type": ["string", "integer", "number", "boolean"] }
+        },
+        "affinityReplace": {
+          "description": "Full REPLACEMENT of the top-level affinity for this role's pods when defined -- two affinities never merge. null means inherit.",
+          "type": ["object", "null"]
+        },
+        "schedulerName": {
+          "description": "Full replacement of the top-level schedulerName for this role's pods (A/B only; colocate never renders a role schedulerName).",
+          "type": "string"
+        }
+      }
     }
   },
 
@@ -90,6 +135,36 @@
                 "maxUnavailable": { "$ref": "#/definitions/intOrPercent" }
               }
             }
+          }
+        }
+      }
+    },
+
+    "pd": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "colocate": { "type": "boolean" },
+        "transferBackend": { "type": "string", "enum": ["nixl"] },
+        "prefill": { "$ref": "#/definitions/pdRole" },
+        "decode": { "$ref": "#/definitions/pdRole" },
+        "router": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "replicas": { "type": "integer", "minimum": 1, "maximum": 2 },
+            "policy": { "type": "string", "minLength": 1 },
+            "imageOverride": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": { "type": "string" },
+                "tag": { "type": "string" }
+              }
+            },
+            "affinityReplace": { "type": ["object", "null"] },
+            "tolerationsReplace": { "type": ["array", "null"] }
           }
         }
       }
@@ -155,6 +230,11 @@
       "description": "Replaces the vLLM command line. null (the default) leaves it to the chart; defined -- including [] -- takes it over, and [] renders no command at all, i.e. the image's own ENTRYPOINT.",
       "type": ["array", "null"],
       "items": { "type": ["string", "integer", "number", "boolean"] }
+    },
+
+    "extraInitShell": {
+      "description": "Bash block spliced into the multi-node pod's command between `ulimit` and `exec vllm serve`. Anything exported here is visible when the chart's ${LWS_LEADER_ADDRESS}/${LWS_WORKER_INDEX} flags expand. No-op on single-pod exec form.",
+      "type": "string"
     },
 
     "service": {

@@ -9,6 +9,17 @@ spec:
   type: {{ .Values.service.type }}
   selector:
     app: {{ .Release.Name }}-vllm
+    {{- if and .Values.pd.enabled (not .Values.pd.colocate) }}
+    # Under the DisaggregatedSet the engines listen on pd.<role>.httpPort,
+    # not service.port -- the public port. The pods that DO bind
+    # service.port are the per-slice routers, which is what a client means
+    # by "the model" here. They all carry component: router (one per slice,
+    # equivalent front doors), so the Service spreads across the slices
+    # exactly as it would across replicas of a single-Deployment model.
+    # Colocate needs none of this: its router is a container in the merged
+    # pod, selected by the app label alone.
+    component: router
+    {{- end }}
     {{- if .Values.lws.enabled }}
     # Under LWS the group's workers carry the same app label but run no API
     # server -- they are vLLM --headless. Without this they would join the

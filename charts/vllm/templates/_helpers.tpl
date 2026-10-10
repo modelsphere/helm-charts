@@ -81,181 +81,21 @@
 {{- end -}}
 
 {{/*
-  The preStop hook's drain script.
-
-  Stage 1a (endpointSyncSeconds) always waits: Kubernetes removes the pod from
-  the EndpointSlice and runs this hook at the SAME time, and the pod has no way
-  to observe that removal. Stage 1b then watches vLLM's own metrics and returns
-  as soon as the server goes idle, so a quiet pod shuts down in about
-  endpointSyncSeconds rather than always burning drainSeconds.
-
-  Two cases the loop has to tell apart, because both look like "no number":
-
-    a blip          one unreadable scrape. Keep waiting -- cutting a drain short
-                    on a transient error is exactly what the drain is for.
-    no server       /metrics unreadable for ~30s running. Nothing to drain (the
-                    port never bound, or the engine is already gone), and sitting
-                    out the rest of drainSeconds would only hold the GPUs while
-                    the replacement waits for them.
-
-  Missing series are the same class of mistake in the other direction: summing
-  over nothing yields 0.0, which reads as "idle" and ends the drain immediately.
-  inflight() reports None instead, so a renamed or unmounted metric makes the
-  hook wait rather than silently skip.
-
-  The tail (`kill`) exists because of how LWS tears a group down. It deletes the leader FIRST, so the leader takes SIGTERM while its
-  workers are still running and still expecting it in the next collective. If
-  vLLM's shutdown then blocks inside cross-node NCCL, the pod burns the entire
-  terminationGracePeriodSeconds before the kubelet SIGKILLs it -- holding its
-  GPUs the whole time, which on a full cluster is exactly what the replacement
-  group is waiting for.
-
-  What the tail may NOT do is SIGKILL PID 1. A process inside a PID namespace
-  cannot kill that namespace's init: the kernel drops signals the init has no
-  handler for, and SIGKILL can never have one (man 7 pid_namespaces). kill(2)
-  still returns 0, so it reads as success while doing nothing.
-
-  What works is the pair below. SIGTERM to PID 1 IS delivered, because vLLM
-  installs a handler for it -- so the hook starts the real shutdown itself,
-  inside the grace period. Then it waits: if PID 1 exits, the kernel tears the
-  PID namespace down and takes this hook with it, so simply surviving that sleep
-  means vLLM is wedged. At that point its CHILDREN get SIGKILLed -- they carry no
-  such protection -- and their death lets PID 1 exit on its own.
-
-  Why the kill half exists at all: vLLM deleted mid-load misses SIGTERM (uvicorn has
-  not installed its handler yet), finishes booting, and then holds its GPUs until the
-  kubelet SIGKILLs it at terminationGracePeriodSeconds -- an hour, for these values.
-  Both roles hit that, which is why `kill` is not lws-only; the caller decides.
-
-  Call it as: include "vllm.preStopScript" (dict "root" $ "kill" false)
-*/}}
-{{- define "vllm.preStopScript" -}}
-{{- $root := .root -}}
-{{- $preStop := $root.Values.lifecycle.preStop -}}
-{{- $poll := int ($preStop.pollIntervalSeconds | default 2) -}}
-{{- /* ~30s of consecutive unreadable metrics, whatever the poll interval. */ -}}
-{{- $streak := max 3 (div 30 $poll) -}}
-{{- $streakSecs := mul $streak $poll -}}
-import time, urllib.request, urllib.error{{ if .kill }}, os, signal{{ end }}
-
-METRICS = "http://127.0.0.1:{{ $root.Values.service.port }}/metrics"
-# Gauges for what vLLM is serving right now and what it has queued.
-BUSY = ("vllm:num_requests_running", "vllm:num_requests_waiting")
-# Never send this at a proxy: a cluster that injects HTTP_PROXY into pods would
-# otherwise have us ask a proxy for the pod's OWN port, which it cannot reach --
-# and an unreadable /metrics reads as "no server to drain" below.
-OPEN = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
-
-
-def log(msg):
-    # PID 1's stdout, so this lands in `kubectl logs` beside the engine's own.
-    try:
-        with open("/proc/1/fd/1", "a") as f:
-            f.write("[preStop] %s\n" % msg)
-    except Exception:
-        pass
-
-
-def inflight():
-    """Requests still on this pod, or None if we cannot tell."""
-    try:
-        body = OPEN(METRICS, timeout=2).read().decode()
-    except Exception:
-        return None
-    total, found = 0.0, False
-    for line in body.splitlines():
-        if line.startswith(BUSY):
-            try:
-                total += float(line.rsplit(" ", 1)[1])
-            except (IndexError, ValueError):
-                return None
-            found = True
-    return total if found else None
-
-
-# Keep serving while the cluster takes this pod out of rotation, so no new requests are sent here.
-time.sleep({{ $preStop.endpointSyncSeconds }})
-{{- if $root.Values.hangWatcher.enabled }}
-
-
-HEALTHZ = "http://127.0.0.1:{{ $root.Values.hangWatcher.port }}/healthz"
-
-
-def hung():
-    """True when the hang-watcher sidecar has already called this engine hung."""
-    try:
-        OPEN(HEALTHZ, timeout=2)
-        return False
-    except urllib.error.HTTPError as e:
-        return e.code == 503
-    except Exception:
-        return False        # sidecar unreachable -- say nothing, fall through to the drain
-{{- end }}
-
-
-deadline = time.monotonic() + {{ $preStop.drainSeconds }}
-unreadable = 0
-while time.monotonic() < deadline:
-    {{- if $root.Values.hangWatcher.enabled }}
-    # A hung engine's counters are frozen, not falling: they sit at whatever they were when it
-    # wedged and never reach 0, so this loop would burn the full drainSeconds waiting for a
-    # number that cannot move. The verdict costs nothing to be wrong about -- by the time
-    # preStop runs the container is already being terminated.
-    if hung():
-        log("hang-watcher reports hung -- counters are frozen, nothing to drain")
-        break
-    {{- end }}
-    n = inflight()
-    if n == 0:
-        log("drained: nothing in flight")
-        break
-    if n is None:
-        unreadable += 1
-        if unreadable >= {{ $streak }}:
-            log("metrics unreadable for ~{{ $streakSecs }}s -- no server to drain")
-            break
-    else:
-        unreadable = 0
-    time.sleep({{ $poll }})
-else:
-    log("drain deadline reached after {{ $preStop.drainSeconds }}s, requests may still be in flight")
-{{- if .kill }}
-{{- $wait := add (int $root.Values.lifecycle.shutdownTimeout) (int $root.Values.lifecycle.shutdownReserveSeconds) }}
-
-# Drained (or out of time). Drive the shutdown from here rather than let the
-# kubelet's SIGTERM find vLLM blocked in a collective its workers will never
-# join. SIGTERM reaches PID 1 because vLLM installs a handler for it; SIGKILL
-# never would. See the comment above this script.
-log("SIGTERM -> PID 1")
-os.kill(1, signal.SIGTERM)
-
-# If PID 1 exits, the kernel tears down the PID namespace and this hook dies with
-# it -- so getting past this sleep means vLLM is stuck in its own shutdown.
-time.sleep({{ $wait }})
-
-log("still up after {{ $wait }}s -- killing PID 1's children")
-keep = (1, os.getpid(), os.getppid())
-for entry in os.listdir("/proc"):
-    if not entry.isdigit() or int(entry) in keep:
-        continue
-    try:
-        os.kill(int(entry), signal.SIGKILL)
-    except OSError:
-        pass
-{{- end }}
-{{- end -}}
-
-{{/*
   The labels every engine pod carries on top of the chart's own (app, role):
-  podLabels, plus rdma-ib: "true" when rdma.enabled under lws.enabled -- the
-  label rdma-injector keys off. A podLabels entry of the same name wins, so a hand-written one is
-  neither duplicated (which would be invalid YAML) nor overridden.
+  podLabels, plus rdma-ib: "true" when rdma.enabled under lws.enabled OR under
+  pd's DisaggregatedSet shape -- the label rdma-injector keys off. A podLabels
+  entry of the same name wins, so a hand-written one is neither duplicated
+  (which would be invalid YAML) nor overridden.
+
+  Colocate pd pods talk NIXL over cuda_ipc inside one netns and never touch
+  IB, so they get no rdma-ib label here even when rdma.enabled is set.
 
   Renders nothing when there is nothing to add.
 */}}
 {{- define "vllm.podLabels" -}}
 {{- $labels := deepCopy (.Values.podLabels | default dict) -}}
-{{- if and .Values.rdma.enabled .Values.lws.enabled -}}
+{{- $needsRdma := or .Values.lws.enabled (and .Values.pd.enabled (not .Values.pd.colocate)) -}}
+{{- if and .Values.rdma.enabled $needsRdma -}}
 {{- $labels = merge $labels (dict "rdma-ib" "true") -}}
 {{- end -}}
 {{- with $labels }}{{ toYaml . }}{{ end -}}

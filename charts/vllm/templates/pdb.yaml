@@ -59,7 +59,26 @@
 */ -}}
 {{- $floor := 0 -}}
 {{- $floorDesc := "" -}}
-{{- if .Values.lws.enabled -}}
+{{- if .Values.pd.enabled -}}
+{{- if .Values.pd.colocate -}}
+{{- /* Colocate is a plain Deployment: replicaCount self-contained
+       appliances, one pod each. The else branch would land here too, but
+       say it directly -- pd turns the lws.enabled branch meaningless
+       without it. */ -}}
+{{- $floor = int .Values.replicaCount -}}
+{{- $floorDesc = printf "replicaCount %d (colocate appliances)" $floor -}}
+{{- else -}}
+{{- /* A/B: the DisaggregatedSet's pods. One slice (replicaCount) holds the
+       whole role pair; a role with size 1 is one pod per replica, >=2 is a
+       group. The floor the PDB counts is the engine pods, most
+       conservative when every role sits at its configured replica/size. */ -}}
+{{- $s := int .Values.replicaCount -}}
+{{- $pf := mul (int .Values.pd.prefill.replicas) (int (.Values.pd.prefill.size | default 1)) -}}
+{{- $dc := mul (int .Values.pd.decode.replicas) (int (.Values.pd.decode.size | default 1)) -}}
+{{- $floor = mul $s (add $pf $dc) -}}
+{{- $floorDesc = printf "replicaCount %d x (prefill %dx%d + decode %dx%d) engine pods" $s (int .Values.pd.prefill.replicas) (int (.Values.pd.prefill.size | default 1)) (int .Values.pd.decode.replicas) (int (.Values.pd.decode.size | default 1)) -}}
+{{- end -}}
+{{- else if .Values.lws.enabled -}}
 {{- $groups := int (ternary .Values.scaler.minReplicas .Values.lws.replicas .Values.scaler.enabled) -}}
 {{- $floor = mul $groups (int .Values.lws.size) -}}
 {{- $floorDesc = printf "%d %s x lws.size %d" $groups (ternary "scaler.minReplicas" "lws.replicas" .Values.scaler.enabled) (int .Values.lws.size) -}}

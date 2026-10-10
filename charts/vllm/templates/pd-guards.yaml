@@ -1,0 +1,121 @@
+{{- /* Render-time guards for pd, in one additive file so the pd
+       incompatibilities are enumerable in a single place. Each check fails
+       the `helm template` rather than let a silently-broken combination
+       reach the cluster. Renders nothing. */ -}}
+{{- if .Values.pd.enabled -}}
+{{- include "vllm.pdGuards" . -}}
+{{- end -}}
+
+{{- define "vllm.pdGuards" -}}
+{{- $pd := .Values.pd -}}
+
+{{- /* Two alternative multi-node forms of the same engine: pd renders its
+       own DisaggregatedSet, lws renders a plain LeaderWorkerSet. They
+       cannot both own the release. */ -}}
+{{- if .Values.lws.enabled -}}
+{{- fail "vllm: lws.enabled and pd.enabled are alternative multi-node forms. pd renders its own DisaggregatedSet (and suppresses the plain lws and the Deployment); turn lws.enabled off." -}}
+{{- end -}}
+
+{{- /* The cross-node PD carried here speaks NIXL over IB. The RDMA triple
+       (IPC_LOCK + rdma/hca_shared + the rdma-ib label's nccl-ib.env source)
+       is part of what the DisaggregatedSet renders on every engine pod, not
+       a knob under it -- the engines fail deep inside ibv without it.
+       Colocate pods run NIXL over cuda_ipc inside one netns and skip the
+       rdma triple entirely, so the requirement is scoped to the DS form. */ -}}
+{{- if and (not $pd.colocate) (not .Values.rdma.enabled) -}}
+{{- fail "vllm: pd.enabled with colocate=false requires rdma.enabled -- the PD roles speak NIXL over IB, and rdma.enabled is what sets IPC_LOCK + rdma/hca_shared + the rdma-ib injector label on every engine pod. There is no cross-node vllm pd-over-TCP path in this chart. (Colocate pd runs NIXL over cuda_ipc and does not need rdma.)" -}}
+{{- end -}}
+
+{{- /* commandOverride replaces the engine command line the chart derives
+       the NIXL config onto; the role contract would break silently. */ -}}
+{{- if not (kindIs "invalid" .Values.commandOverride) -}}
+{{- fail "vllm: pd.enabled and commandOverride do not compose -- the chart derives --kv-transfer-config and the rank/headless flags per role, and commandOverride replaces that whole line. Model the two roles in values, or drop pd and override a single engine." -}}
+{{- end -}}
+
+{{- /* Scaling a PD set is a per-role decision (the prefill:decode ratio is
+       the point), one scaler targets one subresource, and the per-role LWS
+       objects rotate revision-hash names per roll -- a targetRef would
+       dangle. */ -}}
+{{- if .Values.scaler.enabled -}}
+{{- fail "vllm: pd.enabled and scaler.enabled do not compose in v1. Scaling a PD set is per-role (prefill:decode ratio), and the per-role LWS names rotate per rollout so a targetRef would dangle. Resize by editing pd.prefill/decode.replicas and applying." -}}
+{{- end -}}
+
+{{- /* The three engine HTTP listeners can share one netns (colocate), and
+       even in A/B they must not collide -- so require pairwise-distinct
+       ports up front rather than a listen error at engine start. */ -}}
+{{- $p1 := int ($pd.prefill.httpPort | default 8001) -}}
+{{- $p2 := int ($pd.decode.httpPort | default 8002) -}}
+{{- $p3 := int .Values.service.port -}}
+{{- if or (eq $p1 $p2) (eq $p1 $p3) (eq $p2 $p3) -}}
+{{- fail (printf "vllm: pd engine http ports must be pairwise distinct (service.port=%d, pd.prefill.httpPort=%d, pd.decode.httpPort=%d). In colocate they share one netns; in every shape they must not collide." $p3 $p1 $p2) -}}
+{{- end -}}
+
+{{- /* The NIXL side-channel ports and the kv http ports must ALSO be
+       pairwise distinct: in colocate both engines share one netns, so two
+       engines binding the same side-channel port would collide silently;
+       cross-pod the distinctness is required for clarity even though each
+       pod has its own IP. */ -}}
+{{- $sc1 := int ($pd.prefill.nixl.sideChannelPort | default 5561) -}}
+{{- $sc2 := int ($pd.decode.nixl.sideChannelPort | default 5562) -}}
+{{- $hp1 := int ($pd.prefill.nixl.httpPort | default 5597) -}}
+{{- $hp2 := int ($pd.decode.nixl.httpPort | default 5598) -}}
+{{- if or (eq $sc1 $sc2) (eq $hp1 $hp2) (eq $sc1 $hp1) (eq $sc2 $hp2) (eq $sc1 $hp2) (eq $sc2 $hp1) -}}
+{{- fail (printf "vllm: pd nixl ports must be pairwise distinct (prefill.sideChannelPort=%d, prefill.httpPort=%d, decode.sideChannelPort=%d, decode.httpPort=%d). In colocate both engines bind them on the same netns, so any collision is a listen failure." $sc1 $hp1 $sc2 $hp2) -}}
+{{- end -}}
+
+{{- /* The rank trio is derived per pod by the chart; restating it in any
+       extraArgs overrides the per-pod value (vLLM takes the LAST
+       occurrence), which is the silent wrong-cluster bug, not a
+       preference. --headless is included for the same reason. */ -}}
+{{- range $roleCfg := list $pd.prefill $pd.decode -}}
+{{- range $arg := ($roleCfg.extraArgs | default list) -}}
+{{- range $derived := list "--nnodes" "--node-rank" "--master-addr" "--master-port" "--headless" "--distributed-executor-backend" -}}
+{{- if hasPrefix $derived (toString $arg) -}}
+{{- fail (printf "vllm: a pd role's extraArgs carries %q, which the chart already derives per pod (nnodes=role size, node-rank per pod, master-addr/port from the leader, --headless on workers). vLLM takes the LAST occurrence, so this would override the per-pod value. Drop it." $arg) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- range $arg := .Values.extraArgs -}}
+{{- range $derived := list "--nnodes" "--node-rank" "--master-addr" "--master-port" "--headless" "--distributed-executor-backend" -}}
+{{- if hasPrefix $derived (toString $arg) -}}
+{{- fail (printf "vllm: extraArgs carries %q, which pd derives per pod (nnodes=role size, node-rank per pod, master-addr/port from the leader, --headless on workers). vLLM takes the LAST occurrence, so this would override the per-pod value. Drop it." $arg) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* The GPU claim has to be explicit per role in every pd shape, not just
+       colocate. There is no "right" default a role should inherit from the
+       top level: prefill and decode rarely want the same count (a 1P1D
+       pattern usually splits 8 as 4/4 or 6/2, not 8/8), and in colocate the
+       merged pod would claim model.gpus twice if both roles fell through
+       (each engine reads the same default when its own gpus is empty).
+       Force the user to say what they mean per role.
+
+       Set means "the key is present and not the empty string" -- detected
+       via kindIs + toString, not via sprig `default`, because sprig treats
+       integer 0 as empty and would silently rewrite `gpus: 0` to unset.
+       0 and "0" are real claims (a GPU-less role stays expressible); only
+       a missing key or an explicit empty string reads as unset.
+
+       model.gpus is deliberately NOT inspected here. Once both roles
+       override it, the fallback is dead config under pd -- the per-role
+       value is what _pod.tpl reads for every pd pod. */ -}}
+{{- $pfSet := and (not (kindIs "invalid" $pd.prefill.gpus)) (ne (toString $pd.prefill.gpus) "") -}}
+{{- $dcSet := and (not (kindIs "invalid" $pd.decode.gpus)) (ne (toString $pd.decode.gpus) "") -}}
+{{- if not (and $pfSet $dcSet) -}}
+{{- fail (printf "vllm: pd.enabled requires an explicit per-role GPU split -- set pd.prefill.gpus and pd.decode.gpus. (pd.prefill.gpus=%v, pd.decode.gpus=%v.) The two roles rarely want the same number, and in colocate both would otherwise inherit model.gpus and double-claim the node. A GPU-less role sets gpus to 0 or \"0\" -- a real claim, not empty." $pd.prefill.gpus $pd.decode.gpus) -}}
+{{- end -}}
+
+{{- /* Colocate is 1P1D inside a merged pod in v1: one prefill container,
+       one decode container. Anything else the user set on the role would
+       be silently ignored, so reject it. Scale by raising replicaCount
+       (more appliances), or use the DisaggregatedSet shape
+       (pd.colocate: false) for per-role scaling. */ -}}
+{{- if $pd.colocate -}}
+{{- if or (ne (int ($pd.prefill.replicas | default 1)) 1) (ne (int ($pd.decode.replicas | default 1)) 1) (ne (int ($pd.prefill.size | default 1)) 1) (ne (int ($pd.decode.size | default 1)) 1) -}}
+{{- fail "vllm: pd.colocate v1 renders exactly one prefill and one decode container per pod. pd.prefill.replicas, pd.decode.replicas, pd.prefill.size and pd.decode.size must all be 1. Scale by raising replicaCount (more appliances), or use the DisaggregatedSet shape (pd.colocate: false) for per-role scaling." -}}
+{{- end -}}
+{{- end -}}
+
+{{- end -}}

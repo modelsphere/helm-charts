@@ -1,0 +1,225 @@
+{{- /* Shape C: the colocate form of pd -- ONE Deployment whose pod carries
+       BOTH engines as containers on a single node, sharing one netns and
+       that node's GPUs, with the router as a third container on the same
+       pod. No DisaggregatedSet, no LeaderWorkerSet, no per-slice headless
+       Services: the router reaches its engines over loopback, because they
+       live beside it.
+
+       replicaCount is ordinary Deployment replicas: N self-contained
+       appliances, each its own router's front door. That keeps every shape
+       on the same port table (see values.yaml) -- the public router on
+       service.port, the engines on pd.<role>.httpPort -- so the front door
+       below and whatever fronts it (CART, ModelRoute, monitor) need no
+       colocate awareness.
+
+       The two engine containers come from the SAME vllm.engineContainers
+       the DisaggregatedSet and one-engine pods use, with colocate=true so
+       the decode side takes the offset identity (its own container name,
+       port name and hang-watcher). The pod scaffold around them -- model
+       volume, /dev/shm, scheduling, hang-watcher config -- is shared with
+       every other shape, so a colocate pod cannot drift from a DS pod on
+       the parts that matter.
+
+       NIXL between the two engines runs over cuda_ipc, not IB. The pod
+       therefore does NOT request rdma/hca_shared, does NOT carry IPC_LOCK,
+       and does NOT go through the rdma-ib injector -- the engine env inside
+       engineContainers already set UCX_TLS=tcp,self,cuda_copy,cuda_ipc (and
+       NCCL_IB_DISABLE=1) for the colocate identity. */ -}}
+{{- if and .Values.pd.enabled .Values.pd.colocate -}}
+{{- include "vllm.shutdownBudget" . }}
+{{- $root := . }}
+{{- $pd := .Values.pd }}
+{{- $fullname := include "vllm.fullname" . }}
+{{- $hasModel := ne (toString (.Values.model.localPath | default "")) "" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app: {{ $root.Release.Name }}-vllm
+spec:
+  replicas: {{ $root.Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ $root.Release.Name }}-vllm
+  {{- with $root.Values.strategy }}
+  strategy:
+    {{- if eq (.type | default "RollingUpdate") "Recreate" }}
+    {{- toYaml (omit . "rollingUpdate") | nindent 4 }}
+    {{- else }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  {{- with $root.Values.progressDeadlineSeconds }}
+  progressDeadlineSeconds: {{ . }}
+  {{- end }}
+  {{- with $root.Values.revisionHistoryLimit }}
+  revisionHistoryLimit: {{ . }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        app: {{ $root.Release.Name }}-vllm
+        {{- with (include "vllm.podLabels" $root) }}
+        {{- . | nindent 8 }}
+        {{- end }}
+    spec:
+      terminationGracePeriodSeconds: {{ $root.Values.terminationGracePeriodSeconds }}
+      {{- if $root.Values.modelCheck.enabled }}
+      initContainers:
+      # Refuse to start the engine unless the mounted model directory actually
+      # holds a model. hostPathType already rejects a missing path; this covers
+      # an empty or half-copied one. Reuses the engine image so no extra image
+      # has to be pulled, and takes no GPU.
+      - name: model-check
+        image: "{{ $root.Values.image.repository }}:{{ $root.Values.image.tag }}"
+        command:
+          - /bin/sh
+          - -c
+          - |
+            DIR={{ $root.Values.model.mountPath | quote }}
+            if [ ! -d "$DIR" ]; then
+              echo "model-check: $DIR is not a directory" >&2
+              exit 1
+            fi
+            if [ -z "$(ls -A "$DIR" 2>/dev/null)" ]; then
+              echo "model-check: $DIR is empty -- is {{ $root.Values.model.localPath }} populated on this node?" >&2
+              exit 1
+            fi
+            {{- range $root.Values.modelCheck.requiredGlobs }}
+            if [ -z "$(find "$DIR" -maxdepth 1 -name {{ . | quote }} -print -quit)" ]; then
+              echo "model-check: no {{ . }} directly under $DIR -- looks like an incomplete model" >&2
+              exit 1
+            fi
+            {{- end }}
+            echo "model-check: $DIR looks like a model directory"
+        volumeMounts:
+        - name: model-storage
+          mountPath: {{ $root.Values.model.mountPath }}
+          readOnly: true
+      {{- end }}
+      containers:
+      # Prefill engine (identity "prefill-leader": single instance, no group).
+      {{- include "vllm.engineContainers" (dict "root" $root "role" "prefill-leader" "roleCfg" $pd.prefill "colocate" true) | nindent 6 }}
+      # Decode engine (identity "decode-leader"; colocate=true gives it the
+      # offset port name / container name / hang-watcher so the two engines
+      # do not collide inside the one pod).
+      {{- include "vllm.engineContainers" (dict "root" $root "role" "decode-leader" "roleCfg" $pd.decode "colocate" true) | nindent 6 }}
+      # Router on loopback: its two engines are the containers beside it, so
+      # there is no headless Service to resolve -- 127.0.0.1 reaches them
+      # directly. One per pod, the pod's front door. --prefill is single-arg
+      # (vllm-router's PD form); the engine's NIXL handshake address is read
+      # back from the engine itself, so no bootstrap port needs to cross the
+      # router's CLI.
+      - name: router
+        {{- $img := $pd.router.imageOverride | default dict }}
+        image: "{{ $img.repository | default "vllm/vllm-router" }}:{{ $img.tag | default "v0.1.16.1" }}"
+        command: ["bash", "-lc"]
+        args:
+        - |
+          set -e
+          exec vllm-router \
+            --vllm-pd-disaggregation \
+            --prefill http://127.0.0.1:{{ $pd.prefill.httpPort | default 8001 }} \
+            --decode  http://127.0.0.1:{{ $pd.decode.httpPort | default 8002 }} \
+            --policy {{ $pd.router.policy | default "round_robin" }} \
+            --host 0.0.0.0 \
+            --port {{ $root.Values.service.port }}
+        # Port name is router-http, NOT http: the prefill engine in this same
+        # pod already names its port http (and decode http1), and the API
+        # server warns on a duplicate name within one pod. The front-door
+        # Service targets this port numerically (service.port), so the name
+        # carries no routing weight -- it only has to be distinct inside the
+        # netns.
+        ports:
+        - { containerPort: {{ $root.Values.service.port }}, name: router-http }
+        {{- /* Same router readiness chain as pd-ds, but against loopback:
+                 both engines share this netns, so 127.0.0.1 is the only
+                 host the script needs. Includes the engine load budget. */ -}}
+        {{- $probeRoles := dict
+            "prefill" (dict "host" "127.0.0.1" "port" ($pd.prefill.httpPort | default 8001))
+            "decode"  (dict "host" "127.0.0.1" "port" ($pd.decode.httpPort | default 8002)) }}
+        {{- include "vllm.pdRouterProbes" (dict "roles" $probeRoles) | nindent 8 }}
+        {{- with $root.Values.env }}
+        env:
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $hasModel }}
+        volumeMounts:
+        - name: model-storage
+          mountPath: {{ $root.Values.model.mountPath }}
+          readOnly: true
+        {{- end }}
+      volumes:
+      {{- if $hasModel }}
+      - name: model-storage
+        hostPath:
+          path: {{ $root.Values.model.localPath }}
+          type: {{ $root.Values.model.hostPathType }}
+      {{- end }}
+      {{- /* /dev/shm, sized for the two engines' multiproc IPC (see
+             values.yaml under shm). The chart mounts one unless a values
+             file already mounts /dev/shm for itself; that also keeps the
+             name from colliding with a user volume of the same name. */}}
+      {{- $userShm := false }}
+      {{- range $root.Values.volumeMounts }}
+      {{- if eq (.mountPath | default "") "/dev/shm" }}{{ $userShm = true }}{{ end }}
+      {{- end }}
+      {{- if and $root.Values.shm.enabled (not $userShm) }}
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: {{ $root.Values.shm.sizeLimit }}
+      {{- end }}
+      {{- if $root.Values.hangWatcher.enabled }}
+      - name: hang-watcher-config
+        configMap:
+          name: {{ $root.Release.Name }}-hang-watcher
+      {{- end }}
+      {{- with $root.Values.volumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- if $root.Values.hostNetwork }}
+      hostNetwork: true
+      {{- end }}
+      {{- with (ternary "ClusterFirstWithHostNet" $root.Values.dnsPolicy (and $root.Values.hostNetwork (not $root.Values.dnsPolicy))) }}
+      dnsPolicy: {{ . }}
+      {{- end }}
+      {{- with $root.Values.schedulerName }}
+      schedulerName: {{ . }}
+      {{- end }}
+      {{- with $root.Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with $root.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- /* Same auto-add as vllm.podSpec: tolerate the accelerator taint
+             so the engine pod is schedulable on its own tainted nodes. A
+             user entry for the same key wins (Helm replaces lists, so a
+             values file that sets `tolerations` would otherwise silently
+             lose this). */}}
+      {{- $tols := default (list) $root.Values.tolerations }}
+      {{- $hasGpuTol := false }}
+      {{- range $tols }}
+      {{- if eq (.key | default "") "nvidia.com/gpu" }}{{- $hasGpuTol = true }}{{- end }}
+      {{- end }}
+      {{- if not $hasGpuTol }}
+      {{- $tols = concat (list (dict "key" "nvidia.com/gpu" "operator" "Exists" "effect" "NoSchedule")) $tols }}
+      {{- end }}
+      {{- with $tols }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end -}}
+{{- /* The front door every colocate appliance sits behind is service.yaml: it
+       selects the merged pods by their app label and exposes service.port --
+       the router container's listen port -- exactly as it does the single-
+       engine Deployment's, so CART, the ModelRoute and the monitor keep
+       working without pd awareness. */}}
