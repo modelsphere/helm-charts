@@ -832,7 +832,7 @@ tolerations:
 
 {{/*
   The pd router's readiness chain: only report the router as Ready when
-  every engine role has at least one reachable upstream. The probe curls
+  every engine role has at least one reachable upstream. The probe calls
   /health not /health_generate: the deep signal (wedged scheduler) is
   already enforced by each engine's own readinessProbe on /health_generate
   plus the hang-watcher sidecar, and here it would cost an engine ~1s of
@@ -890,16 +890,18 @@ set -u
 check() {
   local src=$1 port=$2
   # A name (any non-numeric character in src) -> resolve via DNS and try each.
-  # Dotted-quad literal -> curl directly, no resolution step.
+  # Dotted-quad literal -> probe directly, no resolution step. python3 +
+  # urllib, never curl or wget: the SGLang image ships neither (see the
+  # preStop drain hook for the same constraint).
   case "$src" in
     *[!0-9.]*)
       for ip in $(getent hosts "$src" | awk '{print $1}' | sort -u); do
-        curl -fsS -m 5 "http://$ip:$port/health" >/dev/null && return 0
+        python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port/health', timeout=5)" >/dev/null 2>&1 && return 0
       done
       return 1
       ;;
     *)
-      curl -fsS -m 5 "http://$src:$port/health" >/dev/null
+      python3 -c "import urllib.request; urllib.request.urlopen('http://$src:$port/health', timeout=5)" >/dev/null 2>&1
       ;;
   esac
 }
