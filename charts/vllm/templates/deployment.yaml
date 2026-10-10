@@ -4,7 +4,10 @@
   lws.yaml when lws.enabled. The two are alternatives: a model either fits on one
   node or it does not, so exactly one of them exists in a release.
 */ -}}
-{{- if not .Values.lws.enabled -}}
+{{- /* pd renders its own workload (DisaggregatedSet, or the merged colocate
+       Deployment in pd-colocate.yaml) -- the plain single-node Deployment is
+       suppressed alongside the plain LWS. */}}
+{{- if and (not .Values.lws.enabled) (not .Values.pd.enabled) -}}
 {{- include "vllm.shutdownBudget" . }}
 {{/*
   A rollout has a budget too, at the other end of the pod's life. The

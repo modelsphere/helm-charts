@@ -102,6 +102,189 @@ lws:
       maxSurge: 1
       maxUnavailable: 0
 
+# Prefill/decode-disaggregated serving, in place of the engine above. The two
+# are mutually exclusive -- turning pd.enabled on suppresses both the
+# Deployment (all shapes) and the plain LeaderWorkerSet (its lws.enabled=false
+# branch), and renders one of:
+#
+#   colocate: false   a DisaggregatedSet (disaggregatedset.x-k8s.io/v1) with
+#                     one prefill role and one decode role, plus per-slice
+#                     router pods. Each role's leaderWorkerTemplate.size
+#                     reuses the same grouping axis as lws.size: 1 = one pod
+#                     per engine (the whole model over NVLink on one node),
+#                     >=2 = a multi-node group per engine (NIXL over IB
+#                     between slices, cross-node NCCL inside a group).
+#                     replicaCount becomes spec.slices -- N independent copies
+#                     of the whole role pair, each with its own router.
+#   colocate: true    a single Deployment whose pod carries BOTH engines as
+#                     containers (plus the router as a third), sharing one
+#                     netns and one node's GPUs. replicaCount is ordinary
+#                     Deployment replicas: N self-contained appliances, each
+#                     its own router. No DisaggregatedSet anywhere. NIXL uses
+#                     cuda_ipc between the engines, no IB involved.
+#
+# One release = one PD configuration. CART, the ModelRoute, monitor and
+# openresty stay intact: the chart's front door moves to
+# <release>-router:<service.port> and they follow through vllm.serviceName,
+# so their values need no pd awareness.
+#
+# The port table is the same in every shape and worth learning once:
+#
+#   listener                    port   where set
+#   router (public)             8000   service.port -- what CART/monitor curl
+#   prefill engine http         8001   pd.prefill.httpPort
+#   decode  engine http         8002   pd.decode.httpPort
+#   prefill nixl side-channel   5561   pd.prefill.nixl.sideChannelPort
+#   decode  nixl side-channel   5562   pd.decode.nixl.sideChannelPort
+#   prefill nixl kv http        5597   pd.prefill.nixl.httpPort
+#   decode  nixl kv http        5598   pd.decode.nixl.httpPort
+#
+# Splitting ports everywhere, not just in colocate where one netns forces it,
+# keeps the shapes identical to operate on. A render-time guard fails if the
+# three http ports are not pairwise distinct; the side-channel / kv-http
+# pairs diverge by default (5561/5562, 5597/5598) so colocate needs nothing
+# special.
+#
+# extraArgs ordering for engines is chart-derived flags (which include the
+# auto-built --kv-transfer-config), then top-level extraArgs, then
+# pd.<role>.extraArgs, LAST occurrence of a repeated flag winning. So role
+# flags override the shared ones, and a user's extraArgs can override the
+# chart's auto-derived --kv-transfer-config (e.g. to stack an L2-cache
+# connector) without the chart getting in the way. As with lws, --nnodes /
+# --node-rank / --master-addr / --master-port / --headless /
+# --distributed-executor-backend belong to the chart and are rejected
+# anywhere in extraArgs.
+#
+# Things the render-time guards turn down, with reasons in the templates:
+#   lws.enabled + pd.enabled, pd + commandOverride, pd + scaler.enabled,
+#   pd.colocate=false + rdma.enabled=false (the engines across pods need
+#   rdma/hca_shared + IPC_LOCK + the rdma-ib injector label; colocate pods
+#   run NIXL over cuda_ipc and skip the rdma triple entirely).
+
+pd:
+  enabled: false
+  colocate: false
+  transferBackend: nixl          # only nixl today (NixlConnector)
+
+  # The two roles. A/B roles render one leaderWorkerTemplate each; colocate
+  # renders one CONTAINER each inside the merged pod (and ignores everything
+  # that is fundamentally a per-pod or per-copy setting).
+  #
+  # Per-role fields that REPLACE the top-level one when set:
+  #   extraArgs       appended after the top-level extraArgs for this role's
+  #                   engines (last-wins, see elsewhere in this file).
+  #   affinityReplace full replacement of top-level affinity for this role's
+  #                   pods. Use it to pin prefill to one GPU product and let
+  #                   decode float, or the reverse.
+  #   schedulerName   full replacement of top-level schedulerName (e.g.
+  #                   volcano on a DS role; colocate never renders volcano
+  #                   itself).
+  # Anything not overridden falls through to the top-level value.
+  prefill:
+    # A/B only. Copies of this role PER SLICE on the DisaggregatedSet;
+    # pd-guards rejects anything other than 1 under pd.colocate (v1 renders
+    # exactly one prefill container per merged pod -- replicas there is
+    # replicaCount, never this).
+    replicas: 1
+    # A/B only. Pods per group for this role: 1 = one engine per pod (the
+    # lws.size=1 pattern), >=2 = a multi-node group per engine (nnodes /
+    # node-rank / master-addr derived exactly as in lws).
+    size: 1
+    # The engine's --port in every shape. Container-level in colocate.
+    httpPort: 8001
+    # A/B + size >= 2 only: the rendezvous port for --master-port inside this
+    # role's group, exactly as lws.distPort is for lws. Empty falls back to
+    # top-level lws.distPort. Colocate and size-1 roles render no
+    # --master-addr/--master-port at all, so this is a no-op there.
+    distPort: ""
+    # GPUs THIS role's engine claims per pod or container. A/B: per pod of
+    # the group (so TP=16-across-2 nodes is size: 2 + gpus: 8). Colocate:
+    # this container's share of the merged pod's node. Required under
+    # pd.enabled (the two roles rarely want the same count, and in colocate
+    # inheriting model.gpus would double-claim the node); a GPU-less role
+    # sets 0. Outside pd the engine falls back to top-level model.gpus.
+    gpus: ""
+    # NixlConnector parameters (ds only; colocate is the same netns so
+    # sideChannelPort still has to differ per role, but no port needs to
+    # leave the pod). All three have defaults that diverge between the two
+    # roles and never need to change unless they collide with a port
+    # already bound on the node.
+    nixl:
+      # ZMQ handshake port for the NIXL side-channel. The peer DIALS this
+      # port on this pod's IP, so it must be unique per engine and reachable.
+      sideChannelPort: 5561
+      # kv_connector_extra_config.http_port inside --kv-transfer-config.
+      # The router queries each engine on this port for its NIXL handshake
+      # address, then forwards it inside kv_transfer_params to the peer.
+      httpPort: 5597
+      # Backends list inside --kv-transfer-config. "UCX" is the only one
+      # validated for colocate; "UCX,GDS" was validated for the cross-node
+      # DS shapes. Render the JSON array only; the chart picks the key.
+      backends: ["UCX", "GDS"]
+    extraArgs: []
+    affinityReplace: null
+    schedulerName: ""
+  decode:
+    replicas: 1
+    size: 1
+    httpPort: 8002
+    distPort: ""
+    gpus: ""
+    nixl:
+      sideChannelPort: 5562
+      httpPort: 5598
+      backends: ["UCX", "GDS"]
+    extraArgs: []
+    affinityReplace: null
+    schedulerName: ""
+
+  router:
+    # A/B only. In colocate there is exactly one router CONTAINER per
+    # merged pod; this replicas is the per-slice router Deployment count
+    # (vllm-router has no in-image HA either -- keep it at 1).
+    replicas: 1
+    # Forwarded verbatim as --policy. The Rust vllm-router accepts
+    # round_robin today; there is no cache_aware.
+    policy: round_robin
+    # The Rust vllm-router is a SEPARATE image from the vllm-openai engine
+    # image (unlike sglang, where the same image carries sglang_router). The
+    # default below is a real published image. Set repository/tag to mirror
+    # a private build.
+    imageOverride:
+      repository: "vllm/vllm-router"
+      tag: "v0.1.16.1"
+    # The router always gets a copy of the model mounted read-only at
+    # model.mountPath (used by the tokenizer's HF lookup) and inherits the
+    # engines' scheduling by default. The *Replace fields fully swap the
+    # top-level blocks rather than merge.
+    affinityReplace: null
+    tolerationsReplace: null
+    # Readiness. In both pd shapes the router container carries an exec
+    # startupProbe (180x30s = 90 minutes, matching the engines' load
+    # budget) + readinessProbe (30x5x3) that curls the engines' own
+    # /health -- prefill AND decode, direct, never through the router's
+    # own port. Only when both roles answer does the router read Ready,
+    # join the EndpointSlice and let traffic through. Without it the
+    # router would land in the Service as soon as its port opened --
+    # before any engine exists -- and CART would 5xx user requests
+    # instead of waiting.
+    #
+    # The endpoint is /health (~3ms on vllm once up, connection-refused
+    # during load): /health calls engine_client.check_health(), deeper
+    # than the sglang equivalent, and the engines' own readinessProbe and
+    # hang-watcher already enforce the deeper signal -- doubling it here
+    # would halve scheduler capacity for nothing.
+    #
+    # Caveats this probe cannot close:
+    #  - after engines are Ready, a wedged scheduler still 200s
+    #    /health from cached frontend state; hang-watcher owns that
+    #    failure mode.
+    #  - the headless Services publish not-ready addresses, so the
+    #    resolve step finds engines that are loading -- the /health
+    #    call itself is what gates "load finished".
+    #  - if an engine pod restarts with a new IP, the router keeps
+    #    stale argv; staleness self-healing is a separate PR.
+
 image:
   repository: "vllm/vllm-openai"
   tag: "latest-cu129-ubuntu2404"

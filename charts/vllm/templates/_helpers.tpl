@@ -247,15 +247,20 @@ for entry in os.listdir("/proc"):
 
 {{/*
   The labels every engine pod carries on top of the chart's own (app, role):
-  podLabels, plus rdma-ib: "true" when rdma.enabled under lws.enabled -- the
-  label rdma-injector keys off. A podLabels entry of the same name wins, so a hand-written one is
-  neither duplicated (which would be invalid YAML) nor overridden.
+  podLabels, plus rdma-ib: "true" when rdma.enabled under lws.enabled OR under
+  pd's DisaggregatedSet shape -- the label rdma-injector keys off. A podLabels
+  entry of the same name wins, so a hand-written one is neither duplicated
+  (which would be invalid YAML) nor overridden.
+
+  Colocate pd pods talk NIXL over cuda_ipc inside one netns and never touch
+  IB, so they get no rdma-ib label here even when rdma.enabled is set.
 
   Renders nothing when there is nothing to add.
 */}}
 {{- define "vllm.podLabels" -}}
 {{- $labels := deepCopy (.Values.podLabels | default dict) -}}
-{{- if and .Values.rdma.enabled .Values.lws.enabled -}}
+{{- $needsRdma := or .Values.lws.enabled (and .Values.pd.enabled (not .Values.pd.colocate)) -}}
+{{- if and .Values.rdma.enabled $needsRdma -}}
 {{- $labels = merge $labels (dict "rdma-ib" "true") -}}
 {{- end -}}
 {{- with $labels }}{{ toYaml . }}{{ end -}}

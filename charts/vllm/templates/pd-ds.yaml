@@ -1,0 +1,244 @@
+{{- /* Shapes A and B: the DisaggregatedSet form of pd -- separate prefill and
+       decode roles over IB (NIXL over UCX), one router per slice
+       (replicaCount = spec.slices). Colocate is a merged Deployment instead;
+       see pd-colocate.yaml.
+
+       The two roles render one leaderWorkerTemplate each from the SAME
+       engine pod builder the non-pd roles use (_pod.tpl), so image, model
+       volume, resources and scheduling cannot drift between roles or away
+       from the single-node/LWS forms. A role's size reuses the lws grouping
+       axis: 1 = one pod per engine, >=2 = a multi-node group per engine. */ -}}
+{{- if and .Values.pd.enabled (not .Values.pd.colocate) -}}
+{{- include "vllm.shutdownBudget" . }}
+{{- $root := . }}
+{{- $lws := .Values.lws }}
+{{- $pd := .Values.pd }}
+{{- $fullname := include "vllm.fullname" . }}
+{{- /* slice count = replicaCount: N independent copies of the whole role pair,
+       each with its own router. */}}
+{{- $slices := int .Values.replicaCount }}
+apiVersion: disaggregatedset.x-k8s.io/v1
+kind: DisaggregatedSet
+metadata:
+  name: {{ $fullname }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Release.Name }}-vllm
+spec:
+  slices: {{ $slices }}
+  roles:
+  {{- /* Each entry: the role name (which becomes the DS role label and drives
+         which side the router pairs on a request), the values block
+         (replicas/size/httpPort/gpus/nixl/extraArgs/affinityReplace/
+         schedulerName/distPort), and the engine's http port read back so the
+         role's headless Service below points at the right one. */}}
+  {{- range $roleName, $roleCfg := dict "prefill" $pd.prefill "decode" $pd.decode }}
+  - name: {{ $roleName }}
+    metadata:
+      labels:
+        app: {{ $root.Release.Name }}-vllm
+        role: {{ $roleName }}
+    spec:
+      replicas: {{ $roleCfg.replicas }}
+      startupPolicy: {{ $lws.startupPolicy }}
+      networkConfig:
+        subdomainPolicy: {{ $lws.subdomainPolicy }}
+      {{- with $lws.rolloutStrategy }}
+      rolloutStrategy:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      leaderWorkerTemplate:
+        size: {{ $roleCfg.size | default 1 }}
+        restartPolicy: {{ $lws.restartPolicy }}
+        leaderTemplate:
+          metadata:
+            labels:
+              app: {{ $root.Release.Name }}-vllm
+              role: {{ $roleName }}
+              {{- with (include "vllm.podLabels" $root) }}
+              {{- . | nindent 14 }}
+              {{- end }}
+          spec:
+            {{- include "vllm.podSpec" (dict "root" $root "role" (printf "%s-leader" $roleName) "roleCfg" $roleCfg) | nindent 12 }}
+        workerTemplate:
+          metadata:
+            labels:
+              app: {{ $root.Release.Name }}-vllm
+              role: {{ $roleName }}
+              {{- with (include "vllm.podLabels" $root) }}
+              {{- . | nindent 14 }}
+              {{- end }}
+          spec:
+            {{- include "vllm.podSpec" (dict "root" $root "role" (printf "%s-worker" $roleName) "roleCfg" $roleCfg) | nindent 12 }}
+  {{- end }}
+{{- /* Per-slice headless Services (one per role per slice) and a per-slice
+       router. The selector keys off the disaggregatedset.x-k8s.io
+       name/role/slice labels, which the DS controller injects into BOTH pod
+       templates of every per-(role, slice) LWS it creates
+       (LeaderWorkerSetManager.Create merges GenerateLabels into
+       LeaderTemplate/WorkerTemplate). The chart's own `app` label cannot be
+       used as the selector key here because the LWS controller re-derives it
+       as "<ds-name>-<role>". publishNotReadyAddresses lets the router resolve
+       upstreams while the engines are still loading.
+
+       The worker-index selector: prefill drops it when the role's replicas
+       exceed 1 so the headless Service matches every prefill group leader of
+       the slice (shape I insight); a single-replica role keeps it because
+       there is exactly one leader and the selector is unambiguous either
+       way. Decode always keeps it: n>1 decode groups under one slice is not
+       a shape the chart supports today. */}}
+{{- range $s := until $slices }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-prefill-hl-s{{ $s }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app: {{ $root.Release.Name }}-vllm
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    disaggregatedset.x-k8s.io/name: {{ $fullname }}
+    disaggregatedset.x-k8s.io/role: prefill
+    disaggregatedset.x-k8s.io/slice: "{{ $s }}"
+    {{- if le (int $pd.prefill.replicas) 1 }}
+    leaderworkerset.sigs.k8s.io/worker-index: "0"
+    {{- end }}
+  ports:
+  - { name: http, port: {{ $pd.prefill.httpPort | default 8001 }}, targetPort: http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-decode-hl-s{{ $s }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app: {{ $root.Release.Name }}-vllm
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    disaggregatedset.x-k8s.io/name: {{ $fullname }}
+    disaggregatedset.x-k8s.io/role: decode
+    disaggregatedset.x-k8s.io/slice: "{{ $s }}"
+    leaderworkerset.sigs.k8s.io/worker-index: "0"
+  ports:
+  - { name: http, port: {{ $pd.decode.httpPort | default 8002 }}, targetPort: http }
+---
+# Router for slice {{ $s }}: resolves this slice's two headless Services into
+# repeated --prefill / --decode flags, so the router sees every group leader
+# of THIS slice. One router per slice is the PD unit's front door. The
+# vllm-router is the Rust binary (separate image from the engine). Its
+# --vllm-pd-disaggregation selects the PD path; --prefill URL is single-arg
+# (unlike sglang's two-arg `--prefill URL PORT` -- the vllm router reads the
+# engine's own NIXL handshake address from the engine directly, so there is
+# no bootstrap port to pass through).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-router-s{{ $s }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app: {{ $root.Release.Name }}-vllm
+spec:
+  replicas: {{ $pd.router.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ $root.Release.Name }}-vllm
+      component: router
+      slice: "{{ $s }}"
+  template:
+    metadata:
+      labels:
+        app: {{ $root.Release.Name }}-vllm
+        component: router
+        slice: "{{ $s }}"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: router
+        {{- $img := $pd.router.imageOverride | default dict }}
+        image: "{{ $img.repository | default "vllm/vllm-router" }}:{{ $img.tag | default "v0.1.16.1" }}"
+        command: ["bash", "-lc"]
+        args:
+        - |
+          set -e
+          # Resolve this slice's headless Services into a list of group-leader
+          # IPs, then build repeated --prefill / --decode flags. getent prints
+          # one line per backing pod for a headless Service. There is no
+          # bootstrap port to propagate (unlike sglang): the vllm-router
+          # fetches each engine's NIXL handshake address from the engine and
+          # hands it to the peer in kv_transfer_params.
+          PF_HL={{ $fullname }}-prefill-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local
+          DC_HL={{ $fullname }}-decode-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local
+          for i in $(seq 1 60); do
+            PF_IPS=$(getent hosts "$PF_HL" | awk '{print $1}' | sort -u)
+            DC_IPS=$(getent hosts "$DC_HL" | awk '{print $1}' | sort -u)
+            [ -n "$PF_IPS" ] && [ -n "$DC_IPS" ] && break
+            echo "router: waiting for slice {{ $s }} upstreams (${i})"
+            sleep 5
+          done
+          if [ -z "$PF_IPS" ] || [ -z "$DC_IPS" ]; then
+            echo "router: no endpoints for prefill/decode headless svc in slice {{ $s }}" >&2
+            exit 1
+          fi
+          PF_ARGS=""
+          for ip in $PF_IPS; do PF_ARGS="$PF_ARGS --prefill http://$ip:{{ $pd.prefill.httpPort | default 8001 }}"; done
+          DC_ARGS=""
+          for ip in $DC_IPS; do DC_ARGS="$DC_ARGS --decode http://$ip:{{ $pd.decode.httpPort | default 8002 }}"; done
+          echo "router: prefill$PF_ARGS"
+          echo "router: decode $DC_ARGS"
+          # shellcheck disable=SC2086
+          exec vllm-router \
+            --vllm-pd-disaggregation \
+            $PF_ARGS $DC_ARGS \
+            --policy {{ $pd.router.policy | default "round_robin" }} \
+            --host 0.0.0.0 \
+            --port {{ $root.Values.service.port }}
+        ports:
+        - { containerPort: {{ $root.Values.service.port }}, name: http }
+        {{- with $root.Values.env }}
+        env:
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+        volumeMounts:
+        - name: model-storage
+          mountPath: {{ $root.Values.model.mountPath }}
+          readOnly: true
+        {{- with $root.Values.volumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      volumes:
+      - name: model-storage
+        hostPath:
+          path: {{ $root.Values.model.localPath }}
+          type: {{ $root.Values.model.hostPathType }}
+      {{- with $root.Values.volumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- /* Router scheduling: inherits the engines' by default; the
+             *Replace fields swap a block wholesale. Pod-level, not per-role.
+             (Slice-leader pinning and the GPU auto-add toleration land in
+             the readiness commit that follows.) */}}
+      {{- $raff := $root.Values.affinity }}
+      {{- if not (kindIs "invalid" $pd.router.affinityReplace) }}{{ if $pd.router.affinityReplace }}{{ $raff = $pd.router.affinityReplace }}{{ end }}
+      {{- end }}
+      {{- with $raff }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- $rtol := $root.Values.tolerations }}
+      {{- if not (kindIs "invalid" $pd.router.tolerationsReplace) }}{{ if $pd.router.tolerationsReplace }}{{ $rtol = $pd.router.tolerationsReplace }}{{ end }}
+      {{- end }}
+      {{- with $rtol }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end -}}
