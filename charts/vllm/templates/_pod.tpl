@@ -318,7 +318,7 @@
          unreachable across pods by definition. Never ship a static value here. */}}
   {{- $engineEnv = concat $engineEnv (list
         (dict "name" "VLLM_NIXL_SIDE_CHANNEL_HOST" "valueFrom" (dict "fieldRef" (dict "fieldPath" "status.podIP")))
-        (dict "name" "VLLM_NIXL_SIDE_CHANNEL_PORT" "value" (printf "%d" $nixlScPort))
+        (dict "name" "VLLM_NIXL_SIDE_CHANNEL_PORT" "value" (printf "%v" $nixlScPort))
         (dict "name" "TORCH_DISABLE_ADDR2LINE" "value" "1")
         (dict "name" "NVIDIA_DISABLE_REQUIRE" "value" "1")
         (dict "name" "VLLM_USE_V1" "value" "1")
