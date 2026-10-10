@@ -183,18 +183,6 @@ spec:
             --model-path {{ $root.Values.model.mountPath }} \
             --host 0.0.0.0 \
             --port {{ $root.Values.service.port }}
-        {{- /* The router's only read of "am I useful" is answering "is at
-               least one engine of each role taking HTTP behind me". exec to
-               avoid depending on the router's own /health (which cannot see
-               dead upstreams). /health on the engines, not /health_generate:
-               the deep signal is already owned by the engines' own probes,
-               and doubling it here would halve scheduler capacity for no
-               signal. startupProbe carries the engines' 90-minute load
-               budget so this pod isn't liveness-killed while engines load.
-               See sglang.pdRouterProbes. */ -}}
-        {{- include "sglang.pdRouterProbes" (dict "roles" (dict
-             "prefill" (dict "host" (printf "%s-prefill-hl-s%d.%s.svc.cluster.local" $fullname $s $root.Release.Namespace) "port" ($pd.prefill.httpPort | default 30001))
-             "decode"  (dict "host" (printf "%s-decode-hl-s%d.%s.svc.cluster.local"  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort  | default 30002)))) | nindent 8 }}
         ports:
         - { containerPort: {{ $root.Values.service.port }}, name: http }
         env:
