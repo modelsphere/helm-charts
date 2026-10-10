@@ -779,6 +779,90 @@ tolerations:
 {{- end -}}
 
 {{/*
+  The pd router's readiness chain: only report the router as Ready when
+  every engine role has at least one reachable upstream. The probe calls
+  /health on the engines directly, never the router's own port: asking the
+  router cannot answer the question -- a router holding a dead upstream
+  list keeps its port open just the same. /health on vllm calls
+  engine_client.check_health(), deeper than the sglang equivalent; the
+  engines' own readinessProbe and the hang-watcher sidecar still own the
+  "wedged scheduler" verdict, so this probe only needs the shallowest
+  question answered: "is at least one engine process behind this router
+  alive and taking HTTP". During model load /health fails (which is
+  precisely why the engines' own startupProbe carries the 90-minute
+  budget), so the router correctly reads not-Ready throughout the load.
+
+  Known gap this does not close: after engines are healthy, a wedged
+  scheduler keeps serving /health 200 from cached frontend state, and
+  the headless Services publish not-ready addresses -- so a post-
+  startup wedge is invisible to this probe. Hang-watcher owns that
+  failure mode (it restarts the engine), and the new engine's IP
+  eventually goes stale in the router's argv -- the staleness self-
+  healing PR addresses that layer.
+
+  Caller passes a dict role -> {host, port}:
+    A/B      the slice's per-role headless FQDN -- script resolves every
+             A-record IP and passes on the first 200.
+    colocate 127.0.0.1 -- literal, skips resolution.
+  Same probe spec, same shape both ways.
+
+  Emits startupProbe and readinessProbe back-to-back at the caller's
+  indent. startupProbe carries the engines' 90-minute load budget so a
+  router pod scheduled before its engines have loaded is not
+  liveness-restarted. readinessProbe ticks at 30s because each call
+  costs an engine, even a shallow one -- the engines' own probes can
+  afford 10s because the kubelet runs them; doubling the cadence by
+  stacking a router copy on top is money for no signal.
+
+  The probe runs python3+urllib, never curl or wget: vllm/vllm-router
+  is a Rust-binary image that ships neither (same constraint the
+  preStop drain hook on the engine pod documents). python3 + urllib is
+  the lowest-common-denominator HTTP client in vllm-derived images.
+*/ -}}
+{{- define "vllm.pdRouterProbes" -}}
+{{- $roles := .roles -}}
+startupProbe:
+  exec:
+    command: ["bash", "-lc", {{ include "vllm.pdRouterProbeScript" (dict "roles" $roles) | quote }}]
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 180           # 180 x 30s = 90 minutes -- the engines' load budget
+readinessProbe:
+  exec:
+    command: ["bash", "-lc", {{ include "vllm.pdRouterProbeScript" (dict "roles" $roles) | quote }}]
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+{{- end -}}
+
+{{- define "vllm.pdRouterProbeScript" -}}
+{{- $roles := .roles -}}
+set -u
+check() {
+  local src=$1 port=$2
+  # A name (any non-numeric character in src) -> resolve via DNS and try each.
+  # Dotted-quad literal -> probe directly, no resolution step. python3 +
+  # urllib, never curl or wget: vllm/vllm-router ships neither (see the
+  # preStop drain hook on the engine pod for the same constraint).
+  case "$src" in
+    *[!0-9.]*)
+      for ip in $(getent hosts "$src" | awk '{print $1}' | sort -u); do
+        python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port/health', timeout=5)" >/dev/null 2>&1 && return 0
+      done
+      return 1
+      ;;
+    *)
+      python3 -c "import urllib.request; urllib.request.urlopen('http://$src:$port/health', timeout=5)" >/dev/null 2>&1
+      ;;
+  esac
+}
+{{- range $role, $target := $roles }}
+check {{ $target.host | quote }} {{ $target.port | quote }} || { echo "router not ready: role {{ $role }} has no reachable upstream" >&2; exit 1; }
+{{- end }}
+exit 0
+{{- end -}}
+
+{{/*
   The preStop hook's drain script.
 
   Stage 1a (endpointSyncSeconds) always waits: Kubernetes removes the pod from

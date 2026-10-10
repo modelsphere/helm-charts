@@ -199,6 +199,16 @@ spec:
             --port {{ $root.Values.service.port }}
         ports:
         - { containerPort: {{ $root.Values.service.port }}, name: http }
+        {{- /* Router readiness gates on its engines, not its own listen port:
+                 a router with an empty upstream list would still answer 200.
+                 Per-role the headless FQDN resolves to every backing engine;
+                 the script curls /health on whatever DNS returns and passes
+                 as soon as one engine answers per role. See
+                 vllm.pdRouterProbes in _pod.tpl for the chain's rationale. */ -}}
+        {{- $probeRoles := dict
+            "prefill" (dict "host" (printf "%s-prefill-hl-s%d.%s.svc.cluster.local" $fullname $s $root.Release.Namespace) "port" ($pd.prefill.httpPort | default 8001))
+            "decode"  (dict "host" (printf "%s-decode-hl-s%d.%s.svc.cluster.local"  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort | default 8002)) }}
+        {{- include "vllm.pdRouterProbes" (dict "roles" $probeRoles) | nindent 8 }}
         {{- with $root.Values.env }}
         env:
           {{- toYaml . | nindent 8 }}
@@ -220,19 +230,57 @@ spec:
       {{- end }}
       {{- /* Router scheduling: inherits the engines' by default; the
              *Replace fields swap a block wholesale. Pod-level, not per-role.
-             (Slice-leader pinning and the GPU auto-add toleration land in
-             the readiness commit that follows.) */}}
+             On top of inherit/replace, pd ALWAYS pins the router to its
+             slice's two leaders via preferredDuringScheduling podAffinity,
+             so the router sits in the same GPU rack as its engines -- a
+             cross-rack hop on every prefill/decode request would wreck the
+             latency budget. Preferred, not required: a rack with no slack
+             should still let the router schedule elsewhere rather than wedge
+             the slice. */}}
       {{- $raff := $root.Values.affinity }}
       {{- if not (kindIs "invalid" $pd.router.affinityReplace) }}{{ if $pd.router.affinityReplace }}{{ $raff = $pd.router.affinityReplace }}{{ end }}
       {{- end }}
-      {{- with $raff }}
+      {{- $sliceAffinity := dict "podAffinity" (dict "preferredDuringSchedulingIgnoredDuringExecution" (list
+          (dict "weight" 90 "podAffinityTerm" (dict "labelSelector" (dict "matchExpressions" (list
+              (dict "key" "disaggregatedset.x-k8s.io/name"  "operator" "In" "values" (list $fullname))
+              (dict "key" "disaggregatedset.x-k8s.io/role"  "operator" "In" "values" (list "prefill"))
+              (dict "key" "disaggregatedset.x-k8s.io/slice" "operator" "In" "values" (list (printf "%d" $s)))
+              (dict "key" "leaderworkerset.sigs.k8s.io/worker-index" "operator" "In" "values" (list "0"))
+          )) "topologyKey" "kubernetes.io/hostname"))
+          (dict "weight" 10 "podAffinityTerm" (dict "labelSelector" (dict "matchExpressions" (list
+              (dict "key" "disaggregatedset.x-k8s.io/name"  "operator" "In" "values" (list $fullname))
+              (dict "key" "disaggregatedset.x-k8s.io/role"  "operator" "In" "values" (list "decode"))
+              (dict "key" "disaggregatedset.x-k8s.io/slice" "operator" "In" "values" (list (printf "%d" $s)))
+              (dict "key" "leaderworkerset.sigs.k8s.io/worker-index" "operator" "In" "values" (list "0"))
+          )) "topologyKey" "kubernetes.io/hostname"))
+      )) }}
+      {{- $mergedRaff := $raff | default dict }}
+      {{- if hasKey $mergedRaff "podAffinity" }}
+        {{- $existing := get $mergedRaff "podAffinity" }}
+        {{- $merged := mergeOverwrite (deepCopy $sliceAffinity.podAffinity) $existing }}
+        {{- $_ := set $mergedRaff "podAffinity" $merged }}
+      {{- else }}
+        {{- $_ := set $mergedRaff "podAffinity" $sliceAffinity.podAffinity }}
+      {{- end }}
+      {{- with $mergedRaff }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- $rtol := $root.Values.tolerations }}
       {{- if not (kindIs "invalid" $pd.router.tolerationsReplace) }}{{ if $pd.router.tolerationsReplace }}{{ $rtol = $pd.router.tolerationsReplace }}{{ end }}
       {{- end }}
-      {{- with $rtol }}
+      {{- /* Same auto-add as vllm.podSpec: tolerate the accelerator taint so
+             the router pod can land on the same pool as its engines. A user
+             entry for the same key wins. */}}
+      {{- $rtols := default (list) $rtol }}
+      {{- $rhasGpuTol := false }}
+      {{- range $rtols }}
+      {{- if eq (.key | default "") "nvidia.com/gpu" }}{{- $rhasGpuTol = true }}{{- end }}
+      {{- end }}
+      {{- if not $rhasGpuTol }}
+      {{- $rtols = concat (list (dict "key" "nvidia.com/gpu" "operator" "Exists" "effect" "NoSchedule")) $rtols }}
+      {{- end }}
+      {{- with $rtols }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}

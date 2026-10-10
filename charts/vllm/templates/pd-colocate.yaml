@@ -134,6 +134,13 @@ spec:
         # netns.
         ports:
         - { containerPort: {{ $root.Values.service.port }}, name: router-http }
+        {{- /* Same router readiness chain as pd-ds, but against loopback:
+                 both engines share this netns, so 127.0.0.1 is the only
+                 host the script needs. Includes the engine load budget. */ -}}
+        {{- $probeRoles := dict
+            "prefill" (dict "host" "127.0.0.1" "port" ($pd.prefill.httpPort | default 8001))
+            "decode"  (dict "host" "127.0.0.1" "port" ($pd.decode.httpPort | default 8002)) }}
+        {{- include "vllm.pdRouterProbes" (dict "roles" $probeRoles) | nindent 8 }}
         {{- with $root.Values.env }}
         env:
           {{- toYaml . | nindent 8 }}
