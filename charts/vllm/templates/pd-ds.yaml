@@ -81,12 +81,14 @@ spec:
        as "<ds-name>-<role>". publishNotReadyAddresses lets the router resolve
        upstreams while the engines are still loading.
 
-       The worker-index selector: prefill drops it when the role's replicas
-       exceed 1 so the headless Service matches every prefill group leader of
-       the slice (shape I insight); a single-replica role keeps it because
-       there is exactly one leader and the selector is unambiguous either
-       way. Decode always keeps it: n>1 decode groups under one slice is not
-       a shape the chart supports today. */}}
+       worker-index: "0" is unconditional on both roles: an LWS group's
+       leader is the only member serving HTTP (workers run --headless), and
+       every group has exactly one idx=0, so the selector matches exactly
+       the slice's leaders -- however many groups the role runs. Dropping
+       it when replicas>1 was wrong: with size>=2 groups it leaks the
+       --headless workers into DNS and the router round-robins prefill
+       requests onto pods that serve nothing. Shape I (size=1 groups)
+       never noticed because there every pod IS its own group's leader. */}}
 {{- range $s := until $slices }}
 ---
 apiVersion: v1
@@ -103,9 +105,7 @@ spec:
     disaggregatedset.x-k8s.io/name: {{ $fullname }}
     disaggregatedset.x-k8s.io/role: prefill
     disaggregatedset.x-k8s.io/slice: "{{ $s }}"
-    {{- if le (int $pd.prefill.replicas) 1 }}
     leaderworkerset.sigs.k8s.io/worker-index: "0"
-    {{- end }}
   ports:
   - { name: http, port: {{ $pd.prefill.httpPort | default 8001 }}, targetPort: http }
 ---
