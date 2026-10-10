@@ -593,6 +593,31 @@ entries:
   sglang:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-10-10T05:18:04.948790609Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.2
+    - alias: continuationGateway
+      condition: continuationGateway.enabled
+      name: continuation-gateway
+      repository: file://../continuation-gateway
+      version: 0.1.1
+    description: SGLang inference deployment -- single-node, multi-node (LeaderWorkerSet)
+      or prefill/decode-disaggregated (DisaggregatedSet or merged colocate pod), with
+      optional cache-aware routing, autoscaling and hang detection
+    digest: 9119677ac45b923583b29bda012884d3638d76c862b942caa415b422ebcf4cbc
+    home: https://github.com/modelsphere/helm-charts
+    name: sglang
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/sglang-0.9.4/sglang-0.9.4.tgz
+    version: 0.9.4
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-10-10T02:23:19.740709767Z"
     dependencies:
     - condition: cart.enabled
@@ -1391,4 +1416,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-10-10T02:23:19.740790209Z"
+generated: "2026-10-10T05:18:04.948969658Z"
