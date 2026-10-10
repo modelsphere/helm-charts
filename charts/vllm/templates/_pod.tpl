@@ -290,10 +290,22 @@
   # $ and JSON survive the trip through bash untouched, the same as in the
   # single-pod exec form. To reference the container's env from extraArgs,
   # use Kubernetes' $(VAR) syntax: the kubelet expands it in either form.
+  #
+  # extraInitShell runs in the same shell between `ulimit` and `exec`. It is
+  # the only place a pod can run arbitrary bash before vLLM takes over -- the
+  # GLOO_SOCKET_IFNAME auto-detect loop needed on hostNetwork is the canonical
+  # example (finding the NIC that owns the pod's 172.28.x.x IP would otherwise
+  # require commandOverride, which forfeits every chart-derived flag). The
+  # block is inserted verbatim, so anything exported here -- including
+  # overridden ${LWS_LEADER_ADDRESS} -- is visible when the flags below are
+  # expanded.
   command: ["bash", "-lc"]
   args:
     - |
       ulimit -l unlimited 2>/dev/null || true
+  {{- with $root.Values.extraInitShell }}
+      {{ . | nindent 6 | trim }}
+  {{- end }}
       exec vllm serve{{ range $flags }} \
         {{ if has . $expand }}"{{ . }}"{{ else }}'{{ replace "'" "'\\''" . }}'{{ end }}{{ end }}
   {{- else }}

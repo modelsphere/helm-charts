@@ -232,6 +232,11 @@
       "items": { "type": ["string", "integer", "number", "boolean"] }
     },
 
+    "extraInitShell": {
+      "description": "Bash block spliced into the multi-node pod's command between `ulimit` and `exec vllm serve`. Anything exported here is visible when the chart's ${LWS_LEADER_ADDRESS}/${LWS_WORKER_INDEX} flags expand. No-op on single-pod exec form.",
+      "type": "string"
+    },
+
     "service": {
       "type": "object",
       "additionalProperties": false,

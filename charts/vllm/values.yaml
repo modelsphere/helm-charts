@@ -355,6 +355,27 @@ extraArgs: []
 # which no container can exec.
 commandOverride:
 
+# extraInitShell is a bash block inserted verbatim into the multi-node
+# (lws/pd) pod's command between `ulimit` and `exec vllm serve`. It is the
+# only way to run arbitrary per-pod shell without commandOverride -- and so
+# the only way to run shell while still inheriting the chart's flag wiring
+# (--nnodes, --node-rank, --master-addr, NixlConnector JSON). Anything
+# exported here lands in the environment that the chart's own
+# ${LWS_LEADER_ADDRESS}/${LWS_WORKER_INDEX} expand against, so an
+# extraInitShell that rewrites those exports (e.g. resolves the leader DNS
+# name to an IP) propagates into the vLLM flags.
+#
+# The canonical use-case is the hostNetwork + multi-node Gloo bootstrap:
+# /etc/hosts maps the pod's own hostname to 127.0.1.1, so torch.distributed's
+# connectFullMesh dies on every rank. Recovery is "export GLOO_SOCKET_IFNAME
+# and NCCL_SOCKET_IFNAME for the NIC that owns the pod's external IP", which
+# the NIC name alone cannot predict per host. See test-yamls/chart/
+# g-ds-size2.yaml for the working loop.
+#
+# Only runs on multi-node (lws.enabled, lws.size>1, or pd.roles). Single-pod
+# exec form has no shell to splice into -- use commandOverride instead.
+extraInitShell: ""
+
 service:
   type: ClusterIP
   # The inference and /metrics port. Threaded through the container port, the
