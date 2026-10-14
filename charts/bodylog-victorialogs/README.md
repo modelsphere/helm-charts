@@ -96,9 +96,30 @@ Records carry whole request and response bodies. Measured on a production router
 from a day of your own traffic. Retention is by age (`retentionPeriod`; a bare number
 is months); `victorialogs.server.retentionDiskSpaceUsage` adds a size cap.
 
-`victorialogs.server.extraArgs.insert.maxLineSizeBytes` is raised to 16MiB. Without
-it, VictoriaLogs skips long lines at ingestion -- that is, most long-prompt
-requests -- and only counts them in `vl_too_long_lines_skipped_total`.
+## Record size
+
+Two limits apply, at different layers and to different things, and only one of
+them can be configured:
+
+| | `insert.maxLineSizeBytes` | the 2MB limit |
+|---|---|---|
+| layer | HTTP ingestion, per read buffer | storage, per entry |
+| measures | the raw input line | the parsed entry's estimated JSON length |
+| default | 256KB | hardcoded `2*1024*1024` |
+| over it | skips to the next line, counts `vl_too_long_lines_skipped_total` | ignores the entry, logs once per 5s, **no metric** |
+
+The 256KB default would skip most long-prompt requests, so this chart raises
+`maxLineSizeBytes` -- but to just under 2MB, not above it. Setting it higher does
+not let a bigger record in (the 2MB limit is a compile-time constant: records are
+stored in blocks of up to 2MB, sized to fit a CPU's L2 cache); it only moves an
+oversize record's death to the layer with no metric.
+
+So the request-body truncation in the VRL is what actually keeps records
+ingestible. Measured on a production router: records average ~370KB, 3.2% exceed
+2MB raw, and capping `req_body` at 1.5MB brings all of those to ~1.50MB. That
+leaves about 0.5MB of headroom for everything else in the record, `resp_body`
+included -- a record whose weight is in the response rather than the request can
+still be over, and nothing reports it.
 
 ## Grafana
 

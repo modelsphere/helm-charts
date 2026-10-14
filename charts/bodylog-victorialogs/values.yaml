@@ -18,9 +18,14 @@ victorialogs:
     # A bare number here is MONTHS; always give a unit.
     retentionPeriod: 14d
     extraArgs:
-      # Body-log records carry whole request and response bodies; with the default
-      # line limit, long-prompt requests are skipped at ingestion.
-      insert.maxLineSizeBytes: "16777216"
+      # Body-log records carry whole request and response bodies, so the 256KB
+      # default would skip most long-prompt requests at ingestion. Just under 2MB
+      # and not higher: VictoriaLogs ignores any entry whose estimated JSON length
+      # exceeds a hardcoded 2MiB (maxUncompressedBlockSize, records are stored in
+      # 2MB blocks), so a larger value here only moves where an oversize record
+      # dies -- from a skip the reader counts in vl_too_long_lines_skipped_total to
+      # a silent return in the storage layer that has no metric at all.
+      insert.maxLineSizeBytes: "2000000"
     persistentVolume:
       enabled: true
       # Measured: ~10GB/hour of raw records stores as ~12GB/day, so 14 days ~ 170GB.
@@ -38,7 +43,9 @@ vector:
   # "end" ships only what is written after Vector first starts. "beginning" also
   # ships the current day's files, which on a busy router is hundreds of GB.
   readFrom: end
-  # Records reach ~11MB; longer lines are dropped at the source.
+  # Records reach ~11MB; longer lines are dropped at the source. Deliberately much
+  # larger than what VictoriaLogs accepts (2MB): the VRL can only shrink a record
+  # Vector has read, so reading has to come first and the truncation second.
   maxLineBytes: 16777216
   # Indexed stream fields: keep them low-cardinality.
   streamFields: [method, status, model]
