@@ -230,6 +230,54 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+{{- /* Without these, the merged pod's engines are unreachable to Prometheus:
+       the only Service covering a colocate release is service.yaml, which
+       points at the router's port, and the router serves no /metrics.
+
+       One headless Service per role fixes it without a new mechanism: the same
+       <fullname>-<role>-hl-s<N> naming and the same port names the
+       DisaggregatedSet shape publishes, so a single ServiceMonitor covers both
+       shapes and the dashboards need no colocate case -- they strip that suffix
+       to recover the release name either way. Both Services select the same pod
+       and differ only in which container port they expose.
+
+       targetPort is http / http1 rather than http twice: port names are unique
+       per pod, so sglang.engineContainers suffixes the decode side (see $oc in
+       _pod.tpl).
+
+       Slice is fixed at 0. Colocate has no slices -- replicaCount scales whole
+       appliances -- but keeping the suffix is what lets one naming rule serve
+       both shapes. */}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-prefill-hl-s0
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app: {{ $root.Release.Name }}-sglang
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: {{ $root.Release.Name }}-sglang
+  ports:
+  - { name: http-prefill, port: {{ $pd.prefill.httpPort | default 30001 }}, targetPort: http }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-decode-hl-s0
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app: {{ $root.Release.Name }}-sglang
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: {{ $root.Release.Name }}-sglang
+  ports:
+  - { name: http-decode, port: {{ $pd.decode.httpPort | default 30002 }}, targetPort: http1 }
 {{- end -}}
 {{- /* The front door every colocate appliance sits behind is service.yaml: it
        selects the merged pods by their app label and exposes service.port --
