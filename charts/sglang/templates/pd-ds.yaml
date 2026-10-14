@@ -98,7 +98,7 @@ spec:
     disaggregatedset.x-k8s.io/slice: "{{ $s }}"
     leaderworkerset.sigs.k8s.io/worker-index: "0"
   ports:
-  - { name: http-prefill, port: {{ $pd.prefill.httpPort | default 30001 }}, targetPort: http }
+  - { name: http-prefill, port: {{ $pd.prefill.httpPort | default 30001 }}, targetPort: http-prefill }
 ---
 apiVersion: v1
 kind: Service
@@ -116,7 +116,7 @@ spec:
     disaggregatedset.x-k8s.io/slice: "{{ $s }}"
     leaderworkerset.sigs.k8s.io/worker-index: "0"
   ports:
-  - { name: http-decode, port: {{ $pd.decode.httpPort | default 30002 }}, targetPort: http }
+  - { name: http-decode, port: {{ $pd.decode.httpPort | default 30002 }}, targetPort: http-decode }
 ---
 # Router for slice {{ $s }}: resolves this slice's two headless Services into
 # repeated --prefill / --decode flags, so the router sees every group leader of

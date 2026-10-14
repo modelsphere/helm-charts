@@ -14,8 +14,8 @@
 
        The two engine containers come from the SAME vllm.engineContainers
        the DisaggregatedSet and one-engine pods use, with colocate=true so
-       the decode side takes the offset identity (its own container name,
-       port name and hang-watcher). The pod scaffold around them -- model
+       the decode side takes the offset identity (its own container name
+       and hang-watcher; its port is named for its role). The pod scaffold around them -- model
        volume, /dev/shm, scheduling, hang-watcher config -- is shared with
        every other shape, so a colocate pod cannot drift from a DS pod on
        the parts that matter.
@@ -103,8 +103,8 @@ spec:
       # Prefill engine (identity "prefill-leader": single instance, no group).
       {{- include "vllm.engineContainers" (dict "root" $root "role" "prefill-leader" "roleCfg" $pd.prefill "colocate" true) | nindent 6 }}
       # Decode engine (identity "decode-leader"; colocate=true gives it the
-      # offset port name / container name / hang-watcher so the two engines
-      # do not collide inside the one pod).
+      # offset container name / hang-watcher so the two engines do not collide
+      # inside the one pod; each engine's port is named for its role).
       {{- include "vllm.engineContainers" (dict "root" $root "role" "decode-leader" "roleCfg" $pd.decode "colocate" true) | nindent 6 }}
       # Router on loopback: its two engines are the containers beside it, so
       # there is no headless Service to resolve -- 127.0.0.1 reaches them
@@ -127,8 +127,9 @@ spec:
             --host 0.0.0.0 \
             --port {{ $root.Values.service.port }}
         # Port name is router-http, NOT http: the prefill engine in this same
-        # pod already names its port http (and decode http1), and the API
-        # server warns on a duplicate name within one pod. The front-door
+        # pod already names its port http-prefill (and decode
+        # http-decode), and the API server warns on a duplicate name within one
+        # pod. The front-door
         # Service targets this port numerically (service.port), so the name
         # carries no routing weight -- it only has to be distinct inside the
         # netns.
@@ -226,15 +227,17 @@ spec:
   while both engines go unwatched.
 
   One headless Service per role fixes it without a new mechanism: the same
-  <fullname>-<role>-hl-s<N> naming and the same `http` port name the
+  <fullname>-<role>-hl-s<N> naming and the same port names the
   DisaggregatedSet shape already publishes, so a single ServiceMonitor covers
   both shapes and the dashboards need no colocate case -- they strip that suffix
   to recover the release name either way. Both Services select the same pod and
   differ only in which container port they expose.
 
-  targetPort is http / http1 rather than http twice: port names are unique per
-  pod, so vllm.engineContainers suffixes the decode side (see $oc in _pod.tpl).
-  The Service port NAME stays http on both, since that is what gets selected on.
+  targetPort names the role, matching the container port vllm.engineContainers
+  declares for that side (see $pname in _pod.tpl). The two engines share a pod,
+  so their port names have to differ; naming them by role rather than suffixing
+  one of them means the Service, the container and the ServiceMonitor all say
+  the same word.
 
   Slice is fixed at 0. Colocate has no slices -- replicaCount scales whole
   appliances -- but keeping the suffix is what lets one naming rule serve both.
@@ -253,7 +256,7 @@ spec:
   selector:
     app: {{ $root.Release.Name }}-vllm
   ports:
-  - { name: http-prefill, port: {{ $pd.prefill.httpPort | default 8001 }}, targetPort: http }
+  - { name: http-prefill, port: {{ $pd.prefill.httpPort | default 8001 }}, targetPort: http-prefill }
 ---
 apiVersion: v1
 kind: Service
@@ -268,7 +271,7 @@ spec:
   selector:
     app: {{ $root.Release.Name }}-vllm
   ports:
-  - { name: http-decode, port: {{ $pd.decode.httpPort | default 8002 }}, targetPort: http1 }
+  - { name: http-decode, port: {{ $pd.decode.httpPort | default 8002 }}, targetPort: http-decode }
 {{- end -}}
 {{- /* The front door every colocate appliance sits behind is service.yaml: it
        selects the merged pods by their app label and exposes service.port --

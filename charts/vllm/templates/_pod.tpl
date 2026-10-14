@@ -74,12 +74,21 @@
        below is added iff the role is a worker. The colocate shape never
        renders workers at all (size=1 by guard). */}}
 {{- /* Colocate-only identity: in the merged pod the two engine containers and
-       their hang-watchers must not share a port name, a container name or a
+       their hang-watchers must not share a container name or a
        side-channel port. Decode is the offset side (idx/oc "1"); prefill
        keeps the plain names. Empty in every one-engine pod, so non-colocate
        renders are unchanged. */}}
 {{- $oc := ternary "1" "" (and .colocate (hasPrefix "decode-" $role)) }}
-{{- $pname := printf "http%s" $oc }}
+{{- /* The engine's HTTP port is named after its role, not after $oc. Two
+       reasons it is not "http" and "http1": "http1" reads as a second port of
+       an unnamed thing rather than as decode, and the role Services that
+       Prometheus scrapes already publish http-prefill / http-decode -- having
+       the container agree removes the step where a reader has to know that
+       targetPort http1 means decode. A non-pd pod keeps the plain "http",
+       which is what service.yaml and every non-pd probe expect. */}}
+{{- $pname := "http" }}
+{{- if hasPrefix "prefill-" $role }}{{- $pname = "http-prefill" }}{{- end }}
+{{- if hasPrefix "decode-" $role }}{{- $pname = "http-decode" }}{{- end }}
 {{- $hwOffset := ternary 1 0 (eq $oc "1") }}
 {{- $hwPort := add (int $root.Values.hangWatcher.port) $hwOffset }}
 {{- $pobj := ternary $root.Values.pd.decode $root.Values.pd.prefill (hasPrefix "decode-" $role) }}
