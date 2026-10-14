@@ -11,7 +11,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: verify
-      image: {{ .Values.test.image | quote }}
+      image: "{{ .Values.test.image.repository }}:{{ .Values.test.image.tag }}"
       env:
         - { name: VL, value: {{ include "bodylog-victorialogs.vlUrl" . | quote }} }
         - { name: WITHIN, value: {{ .Values.test.expectRecordsWithin | quote }} }

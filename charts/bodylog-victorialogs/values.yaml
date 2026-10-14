@@ -115,7 +115,12 @@ grafana:
 # and its query API works. Set expectRecordsWithin (e.g. 1h) on a router with steady
 # traffic to also require that records arrived in that window.
 test:
-  image: docker.io/curlimages/curl:8.11.1
+  # repository and tag apart, like vector.image above: an air-gapped install has
+  # to point the repository at its own registry, and a single string would make
+  # it restate the tag -- which is how a pinned tag drifts from the chart.
+  image:
+    repository: docker.io/curlimages/curl
+    tag: 8.11.1
   expectRecordsWithin: ""
 
 podAnnotations: {}

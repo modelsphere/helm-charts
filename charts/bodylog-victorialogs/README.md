@@ -191,4 +191,5 @@ NOT resp_meta.finish_reason:"stop"
 | `vector.buffer.whenFull` | `block` | `drop_newest` to keep reading and lose the overflow |
 | `grafana.datasource.enabled` | `true` | |
 | `grafana.datasource.namespace` | `monitoring` | Grafana's namespace |
+| `test.image.repository` / `.tag` | `docker.io/curlimages/curl` / `8.11.1` | the `helm test` hook image |
 | `test.expectRecordsWithin` | `""` | e.g. `1h` |
