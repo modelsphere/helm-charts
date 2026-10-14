@@ -20,9 +20,23 @@ spec:
   podTargetLabels:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- /* http-inference belongs to service.yaml, which on a pd release fronts the
+         ROUTER, not an engine. The router serves no /metrics (it answers 404),
+         so a pd release scraped on that port yields no engine series at all --
+         and because the ServiceMonitor still exists and still selects a
+         Service, nothing looks misconfigured: the target simply sits there
+         health=down with a 404, and every engine panel is empty.
+
+         The role Services published by both pd shapes carry the engine ports
+         under their own names, so ranging over those is what actually reaches
+         an engine. Nothing resolves these names externally (the router finds
+         its engines over DNS and a numeric port), so they are free to say what
+         they mean. */}}
   endpoints:
-    - port: http-inference
-      path: {{ .Values.serviceMonitor.path | quote }}
-      interval: {{ .Values.serviceMonitor.interval | quote }}
-      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout | quote }}
+    {{- range $p := ternary (list "http-prefill" "http-decode") (list "http-inference") $.Values.pd.enabled }}
+    - port: {{ $p }}
+      path: {{ $.Values.serviceMonitor.path | quote }}
+      interval: {{ $.Values.serviceMonitor.interval | quote }}
+      scrapeTimeout: {{ $.Values.serviceMonitor.scrapeTimeout | quote }}
+    {{- end }}
 {{- end -}}
