@@ -44,13 +44,18 @@ data:
         batch:
           max_events: 1000
           timeout_secs: 1
-        # Never give up on a batch: with a retry limit, Vector drops the batch once
-        # VictoriaLogs has been down longer than the retries last (a restart, or
-        # the first minute of an install) and the lines are lost. Acknowledgements
-        # hold the file checkpoint until VictoriaLogs has accepted the lines, so an
-        # outage pauses reading instead.
-        request:
-          retry_max_duration_secs: 30
+        # A dropped batch is a lost record: once the file source's checkpoint has
+        # moved past a line, nothing reads it again. Two things keep that from
+        # happening while VictoriaLogs is down (a restart, or the first minute of
+        # an install):
+        #   - request.retry_attempts is unlimited by default, so a batch is never
+        #     abandoned. Do not set it to a finite value.
+        #   - acknowledgements hold the checkpoint until VictoriaLogs has accepted
+        #     the lines, so an outage pauses reading instead of advancing past
+        #     records that never arrived. This is what the setting below buys; the
+        #     retry backoff is not involved.
+        # request.retry_max_duration_secs is *not* a retry budget -- it only caps
+        # the wait between retries (default 30s) -- so it is left alone.
         acknowledgements:
           enabled: true
   bodylog.vrl: |

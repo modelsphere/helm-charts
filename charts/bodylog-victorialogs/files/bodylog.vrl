@@ -10,28 +10,54 @@ if err != null {
 . = parsed
 
 # 2. model and token usage, preferably from resp_meta.
+#
+#    The presence of usage.prompt_tokens is what says the usage object was
+#    filled in: a streaming response can carry resp_meta.model while its usage
+#    object is still empty, and reading that as zeros would hide real counts
+#    that the response body does have.
+#
+#    total_tokens is derived with an explicit `exists`, not with `??`: to_int(null)
+#    returns 0 without erroring, so `?? (prompt + completion)` would never fire
+#    on a missing field and the sum would be recorded as 0.
+have_tokens = false
 if is_object(.resp_meta) {
   if exists(.resp_meta.model) {
     .model = .resp_meta.model
   }
-  if is_object(.resp_meta.usage) {
-    .prompt_tokens = to_int(.resp_meta.usage.prompt_tokens) ?? 0
-    .completion_tokens = to_int(.resp_meta.usage.completion_tokens) ?? 0
-    .total_tokens = to_int(.resp_meta.usage.total_tokens) ?? (.prompt_tokens + .completion_tokens)
+  if is_object(.resp_meta.usage) && exists(.resp_meta.usage.prompt_tokens) {
+    pt = to_int(.resp_meta.usage.prompt_tokens) ?? 0
+    ct = to_int(.resp_meta.usage.completion_tokens) ?? 0
+    .prompt_tokens = pt
+    .completion_tokens = ct
+    if exists(.resp_meta.usage.total_tokens) {
+      .total_tokens = to_int(.resp_meta.usage.total_tokens) ?? (pt + ct)
+    } else {
+      .total_tokens = pt + ct
+    }
+    have_tokens = true
   }
 }
 
-# 3. Fallback: the response body.
-if !exists(.model) && is_string(.resp_body) {
+# 3. Fallback: the response body -- for the model, for the token counts, or for
+#    just one of them. The two are decided separately, so an empty usage object
+#    next to a present resp_meta.model still gets its counts from the body.
+if (!exists(.model) || !have_tokens) && is_string(.resp_body) {
   resp, err = parse_json(.resp_body)
   if err == null && is_object(resp) {
-    if exists(resp.model) {
+    if !exists(.model) && exists(resp.model) {
       .model = resp.model
     }
-    if is_object(resp.usage) {
-      .prompt_tokens = to_int(resp.usage.prompt_tokens) ?? 0
-      .completion_tokens = to_int(resp.usage.completion_tokens) ?? 0
-      .total_tokens = to_int(resp.usage.total_tokens) ?? 0
+    if !have_tokens && is_object(resp.usage) && exists(resp.usage.prompt_tokens) {
+      pt = to_int(resp.usage.prompt_tokens) ?? 0
+      ct = to_int(resp.usage.completion_tokens) ?? 0
+      .prompt_tokens = pt
+      .completion_tokens = ct
+      if exists(resp.usage.total_tokens) {
+        .total_tokens = to_int(resp.usage.total_tokens) ?? (pt + ct)
+      } else {
+        .total_tokens = pt + ct
+      }
+      have_tokens = true
     }
   }
 }

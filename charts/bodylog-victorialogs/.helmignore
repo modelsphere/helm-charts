@@ -5,6 +5,3 @@
 *.tmp
 *.bak
 *~
-# Python bytecode left by running files/*.py locally
-__pycache__/
-*.pyc

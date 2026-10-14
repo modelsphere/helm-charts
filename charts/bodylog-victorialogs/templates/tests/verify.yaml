@@ -29,7 +29,13 @@ spec:
           all=$(q '* | stats count() n') || fail "query API error"
           echo "ok    query API: $all"
           if [ -n "$WITHIN" ]; then
-            n=$(q "_time:$WITHIN | stats count() n" | sed -n 's/.*"n":"\([0-9]*\)".*/\1/p')
-            [ "${n:-0}" -gt 0 ] || fail "no records in the last $WITHIN -- is Vector shipping?"
+            # Three outcomes, three messages. Piping the query straight into sed
+            # would lose its exit status and report an API error, or a count this
+            # parser could not read, as "no records" -- blaming Vector for a
+            # failure on the VictoriaLogs side.
+            out=$(q "_time:$WITHIN | stats count() n") || fail "query API error on _time:$WITHIN"
+            n=$(printf '%s' "$out" | sed -n 's/.*"n":"\{0,1\}\([0-9]\{1,\}\)"\{0,1\}.*/\1/p')
+            [ -n "$n" ] || fail "no count in the answer to _time:$WITHIN -- got: $out"
+            [ "$n" -gt 0 ] || fail "0 records in the last $WITHIN -- is Vector shipping?"
             echo "ok    $n records in the last $WITHIN"
           fi

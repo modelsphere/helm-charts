@@ -20,6 +20,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: vector
 {{- end -}}
 
+{{/* The Vector Deployment's own labels. app.kubernetes.io/version is Vector's
+     version here: the chart's appVersion tracks VictoriaLogs, which is the wrong
+     number to stamp on the Vector workload. */}}
+{{- define "bodylog-victorialogs.vectorLabels" -}}
+helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{ include "bodylog-victorialogs.vectorSelectorLabels" . }}
+app.kubernetes.io/version: {{ .Values.vector.image.tag | quote }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end -}}
+
 {{/* The VictoriaLogs base URL: the bundled server's Service, or victorialogsUrl.
      Mirrors the subchart's naming: <release>-victorialogs-server, or
      <release>-server when the release name already contains "victorialogs". */}}

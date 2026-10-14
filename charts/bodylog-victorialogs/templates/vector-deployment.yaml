@@ -5,7 +5,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "bodylog-victorialogs.fullname" . }}-vector
-  labels: {{- include "bodylog-victorialogs.labels" . | nindent 4 }}
+  labels: {{- include "bodylog-victorialogs.vectorLabels" . | nindent 4 }}
 spec:
   replicas: 1
   # Two pods on one checkpoint directory would ship the same lines twice.
