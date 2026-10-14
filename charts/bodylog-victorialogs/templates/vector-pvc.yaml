@@ -1,0 +1,19 @@
+{{- $p := .Values.vector.state }}
+{{- if and $p.enabled (not $p.existingClaim) (not $p.hostPath) }}
+# Vector's read positions and disk buffer. This has to be a volume rather than a
+# node directory: podAffinity follows the bodylog pod, and read positions left
+# behind on the old node are read positions Vector does not have.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "bodylog-victorialogs.stateClaimName" . }}
+  labels: {{- include "bodylog-victorialogs.vectorLabels" . | nindent 4 }}
+spec:
+  accessModes: [{{ $p.accessMode | quote }}]
+  {{- with $p.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $p.size | quote }}
+{{- end }}

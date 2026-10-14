@@ -46,9 +46,48 @@ vector:
   timeField: ts
   # The VRL program for each record. Empty uses files/bodylog.vrl.
   vrl: ""
-  # Node directory for Vector's read checkpoints, so a restart resumes where it
-  # stopped instead of skipping or repeating lines. Empty: /var/lib/<fullname>.
-  checkpointHostPath: ""
+
+  # Vector's own state -- the read positions and the sink's buffer -- on a volume
+  # that follows the pod.
+  #
+  # It has to follow the pod, not the node. podAffinity moves Vector whenever the
+  # bodylog pod moves, and on a node with no read positions `readFrom: end` seeks
+  # to the end of the file bodylog is writing: everything already in today's file
+  # is never shipped, silently, and on a busy router that is gigabytes.
+  #
+  # Called `state` rather than `persistence` because victoria-logs-single bundles
+  # a vector subchart with a `persistence` of its own: Helm coalesces the two and
+  # reports the type conflict on every render.
+  state:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""            # empty: the cluster's default class
+    # One replica, and the update strategy is Recreate, so ReadWriteOnce also
+    # makes a second reader on the same positions impossible by construction.
+    accessMode: ReadWriteOnce
+    # The read positions are a few hundred bytes per file; this is sized for
+    # buffer.maxSize below, which must fit with room to spare.
+    size: 10Gi
+    # Last resort for a cluster with no dynamic provisioner: a node directory,
+    # which does not follow the pod. Read the paragraph above before using it.
+    hostPath: ""
+
+  # The sink's buffer, on the same volume as the read positions above.
+  #
+  # `disk` is what makes a record durable before VictoriaLogs has taken it. That
+  # matters when Vector restarts in the middle of an outage: a memory buffer loses
+  # what it is holding, and bodylog may by then have archived and deleted the file
+  # those records came from, so there is nothing left to re-read. It also bounds
+  # Vector's memory by the buffer rather than by the length of the outage.
+  #
+  # How much of an outage the buffer absorbs is maxSize divided by the record rate
+  # (~2GB/hour on a busy router). Past that, whenFull decides: `block` stops
+  # reading (nothing lost, but reading is paused), `drop_newest` keeps reading and
+  # loses the overflow.
+  buffer:
+    type: disk                  # disk | memory
+    maxSize: 8589934592         # 8GiB. Vector's minimum for a disk buffer is 256MiB.
+    whenFull: block             # block | drop_newest
   resources:
     requests: { cpu: 200m, memory: 256Mi }
     limits: { memory: 2Gi }

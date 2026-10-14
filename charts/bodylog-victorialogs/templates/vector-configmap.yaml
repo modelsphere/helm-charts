@@ -4,6 +4,27 @@
 {{- if not (or .Values.bodylog.hostPath .Values.bodylog.existingClaim) }}
 {{- fail "set bodylog.hostPath (or bodylog.existingClaim) to where bodylog writes its JSONL" }}
 {{- end }}
+{{- $p := .Values.vector.state }}
+{{- if and $p.existingClaim $p.hostPath }}
+{{- fail "set only one of vector.state.existingClaim and vector.state.hostPath" }}
+{{- end }}
+{{- $buf := .Values.vector.buffer }}
+{{- if not (has $buf.type (list "disk" "memory")) }}
+{{- fail (printf "vector.buffer.type is %q: it must be disk or memory" $buf.type) }}
+{{- end }}
+{{- if eq $buf.type "disk" }}
+{{- if not $p.enabled }}
+{{- fail "vector.buffer.type=disk needs vector.state.enabled: a disk buffer on an emptyDir is lost on every restart and fills the node's disk instead. Use buffer.type=memory if the pod must be stateless." }}
+{{- end }}
+{{- $bufBytes := include "bodylog-victorialogs.bytes" $buf.maxSize }}
+{{- if and $bufBytes (lt (int64 $bufBytes) 268435456) }}
+{{- fail (printf "vector.buffer.maxSize is %v: Vector refuses a disk buffer under 256MiB" $buf.maxSize) }}
+{{- end }}
+{{- $volBytes := include "bodylog-victorialogs.bytes" $p.size }}
+{{- if and $bufBytes $volBytes (not $p.existingClaim) (not $p.hostPath) (ge (int64 $bufBytes) (int64 $volBytes)) }}
+{{- fail (printf "vector.buffer.maxSize (%v) does not fit in vector.state.size (%v): the buffer would fill the volume and Vector would stall with no room to write" $buf.maxSize $p.size) }}
+{{- end }}
+{{- end }}
 {{- $query := list (printf "_stream_fields=%s" (join "," .Values.vector.streamFields)) }}
 {{- with .Values.vector.timeField }}{{ $query = append $query (printf "_time_field=%s" .) }}{{ end }}
 apiVersion: v1
@@ -13,15 +34,15 @@ metadata:
   labels: {{- include "bodylog-victorialogs.labels" . | nindent 4 }}
 data:
   vector.yaml: |
-    data_dir: /vector-data-dir
+    # Read positions and the sink's buffer both live under data_dir, which is the
+    # volume that follows the pod (vector.state).
+    data_dir: {{ include "bodylog-victorialogs.statePath" . }}
     api:
       enabled: true
       address: 0.0.0.0:8686
     sources:
       bodylog:
         type: file
-        # Checkpoints live on the node, not in the pod's emptyDir data_dir.
-        data_dir: /var/lib/vector-checkpoint
         include: ["/data/bodylog/20*/*.jsonl"]
         read_from: {{ .Values.vector.readFrom }}
         max_line_bytes: {{ int64 .Values.vector.maxLineBytes }}
@@ -44,19 +65,27 @@ data:
         batch:
           max_events: 1000
           timeout_secs: 1
-        # A dropped batch is a lost record: once the file source's checkpoint has
-        # moved past a line, nothing reads it again. Two things keep that from
+        # A dropped batch is a lost record: once the file source's read position
+        # has moved past a line, nothing reads it again. Two things keep that from
         # happening while VictoriaLogs is down (a restart, or the first minute of
         # an install):
         #   - request.retry_attempts is unlimited by default, so a batch is never
         #     abandoned. Do not set it to a finite value.
-        #   - acknowledgements hold the checkpoint until VictoriaLogs has accepted
-        #     the lines, so an outage pauses reading instead of advancing past
-        #     records that never arrived. This is what the setting below buys; the
-        #     retry backoff is not involved.
-        # request.retry_max_duration_secs is *not* a retry budget -- it only caps
-        # the wait between retries (default 30s) -- so it is left alone.
+        #   - acknowledgements hold the read position until the record is durable,
+        #     so an outage pauses reading instead of advancing past records that
+        #     never arrived. The retry backoff is not involved;
+        #     request.retry_max_duration_secs only caps the wait between retries.
         acknowledgements:
           enabled: true
+        # With a disk buffer, "durable" means written here -- so reading carries on
+        # through an outage and bodylog's archived files are released rather than
+        # pinned by an open handle. Without one, Vector stops reading and holds
+        # bodylog's disk for the length of the outage.
+        buffer:
+          type: {{ $buf.type }}
+          {{- if eq $buf.type "disk" }}
+          max_size: {{ int64 (include "bodylog-victorialogs.bytes" $buf.maxSize | default $buf.maxSize) }}
+          {{- end }}
+          when_full: {{ $buf.whenFull }}
   bodylog.vrl: |
 {{ .Values.vector.vrl | default (.Files.Get "files/bodylog.vrl") | indent 4 }}

@@ -46,6 +46,23 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end -}}
 
-{{- define "bodylog-victorialogs.checkpointPath" -}}
-{{- .Values.vector.checkpointHostPath | default (printf "/var/lib/%s" (include "bodylog-victorialogs.fullname" .)) -}}
+{{/* Where Vector keeps its state inside the container: read positions and, with a
+     disk buffer, the buffered records. */}}
+{{- define "bodylog-victorialogs.statePath" -}}/var/lib/vector{{- end -}}
+
+{{- define "bodylog-victorialogs.stateClaimName" -}}
+{{- .Values.vector.state.existingClaim | default (printf "%s-vector" (include "bodylog-victorialogs.fullname" .)) -}}
+{{- end -}}
+
+{{/* A size such as 8589934592, 8Gi or 512Mi as a number of bytes. Empty when the
+     value is in a form this cannot read, so a caller must treat "" as unknown
+     rather than as zero. */}}
+{{- define "bodylog-victorialogs.bytes" -}}
+{{- $s := . | toString | trim -}}
+{{- if regexMatch "^[0-9]+$" $s -}}{{ $s }}
+{{- else if regexMatch "^[0-9]+(\\.[0-9]+)?Ti$" $s -}}{{ mulf (trimSuffix "Ti" $s) 1099511627776 | int64 }}
+{{- else if regexMatch "^[0-9]+(\\.[0-9]+)?Gi$" $s -}}{{ mulf (trimSuffix "Gi" $s) 1073741824 | int64 }}
+{{- else if regexMatch "^[0-9]+(\\.[0-9]+)?Mi$" $s -}}{{ mulf (trimSuffix "Mi" $s) 1048576 | int64 }}
+{{- else if regexMatch "^[0-9]+(\\.[0-9]+)?Ki$" $s -}}{{ mulf (trimSuffix "Ki" $s) 1024 | int64 }}
+{{- end -}}
 {{- end -}}

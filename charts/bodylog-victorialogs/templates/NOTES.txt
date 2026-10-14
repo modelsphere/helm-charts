@@ -3,6 +3,22 @@ Vector ships {{ .Values.bodylog.hostPath | default .Values.bodylog.existingClaim
 {{- if eq .Values.vector.readFrom "end" }}
 Only records written from now on are shipped (vector.readFrom=end).
 {{- end }}
+{{- if not .Values.vector.state.enabled }}
+
+vector.state is off, so the read positions are on an emptyDir: every restart
+re-applies vector.readFrom={{ .Values.vector.readFrom }} and whatever bodylog wrote
+in between is skipped.
+{{- else if .Values.vector.state.hostPath }}
+
+The read positions are in {{ .Values.vector.state.hostPath }} on the node. They do not follow the
+pod, so when the bodylog pod moves Vector restarts with none and skips ahead; a
+claim (vector.state.existingClaim, or the default) does follow it.
+{{- else if eq .Values.vector.buffer.type "disk" }}
+
+Read positions and a {{ .Values.vector.buffer.maxSize }}-byte disk buffer are on PVC {{ include "bodylog-victorialogs.stateClaimName" . }}
+({{ .Values.vector.state.size }}). That buffer is how long a VictoriaLogs outage Vector can absorb
+without stopping to read -- and without holding on to bodylog's disk.
+{{- end }}
 {{- if .Values.grafana.datasource.enabled }}
 
 Grafana datasource "{{ .Values.grafana.datasource.name }}" is provided as ConfigMap

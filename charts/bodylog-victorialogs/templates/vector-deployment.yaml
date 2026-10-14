@@ -8,7 +8,9 @@ metadata:
   labels: {{- include "bodylog-victorialogs.vectorLabels" . | nindent 4 }}
 spec:
   replicas: 1
-  # Two pods on one checkpoint directory would ship the same lines twice.
+  # Recreate, not RollingUpdate: two pods sharing one set of read positions would
+  # ship the same lines twice, and with a ReadWriteOnce claim the second would
+  # never start anyway.
   strategy:
     type: Recreate
   selector:
@@ -51,8 +53,7 @@ spec:
           volumeMounts:
             - { name: config, mountPath: /etc/vector, readOnly: true }
             - { name: bodylog, mountPath: /data/bodylog, readOnly: true }
-            - { name: checkpoint, mountPath: /var/lib/vector-checkpoint }
-            - { name: data, mountPath: /vector-data-dir }
+            - { name: state, mountPath: {{ include "bodylog-victorialogs.statePath" . | quote }} }
       volumes:
         - name: config
           configMap:
@@ -63,7 +64,14 @@ spec:
           {{- else }}
           persistentVolumeClaim: { claimName: {{ .Values.bodylog.existingClaim | quote }}, readOnly: true }
           {{- end }}
-        - name: checkpoint
-          hostPath: { path: {{ include "bodylog-victorialogs.checkpointPath" . | quote }}, type: DirectoryOrCreate }
-        - name: data
+        # Read positions and the sink's buffer. A volume so that they follow the
+        # pod when podAffinity moves it to the bodylog pod's new node; an emptyDir
+        # here means every restart re-applies vector.readFrom.
+        - name: state
+          {{- if not .Values.vector.state.enabled }}
           emptyDir: {}
+          {{- else if .Values.vector.state.hostPath }}
+          hostPath: { path: {{ .Values.vector.state.hostPath | quote }}, type: DirectoryOrCreate }
+          {{- else }}
+          persistentVolumeClaim: { claimName: {{ include "bodylog-victorialogs.stateClaimName" . | quote }} }
+          {{- end }}

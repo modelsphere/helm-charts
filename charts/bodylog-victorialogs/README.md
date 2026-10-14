@@ -37,6 +37,11 @@ helm test bodylog-victorialogs -n logging
   ReadWriteOnce claim works, because both pods run on the same node.
 - To ship into a VictoriaLogs you already run: `victorialogs.enabled=false` and
   `victorialogsUrl=http://...:9428`.
+- Vector claims 10Gi of the default StorageClass for its read positions and its
+  disk buffer -- see *Restarts and node moves* below for why that is not an
+  `emptyDir` or a node directory. A cluster with no dynamic provisioner can use
+  `vector.state.existingClaim`, or `vector.state.hostPath` with the
+  caveat spelled out there.
 
 `helm test` checks that VictoriaLogs answers at the URL Vector and Grafana are
 configured with, and that its query API works. On a router with steady traffic, set
@@ -49,11 +54,29 @@ configured with, and that its query API works. On a router with steady traffic, 
   pod on every other node. If bodylog is not running, Vector stays Pending too.
 - **Where reading starts.** `vector.readFrom: end` (default) ships records written
   after Vector first starts. `beginning` also ships the current day's files -- on a
-  busy router that is hundreds of GB at once.
-- **Restarts.** Read positions are kept in a node directory
-  (`vector.checkpointHostPath`, default `/var/lib/<release>`), so a restart resumes
-  where it stopped. The update strategy is `Recreate`: two pods on one checkpoint
-  directory would ship the same lines twice.
+  busy router that is hundreds of GB at once. Files bodylog creates later, at each
+  hour's rotation, are always read from the beginning whatever this is set to.
+- **Restarts and node moves.** Read positions live on a claim of their own
+  (`vector.state`, 10Gi from the cluster's default StorageClass), so they
+  follow the pod. That matters more than it sounds: `podAffinity` moves Vector
+  whenever the bodylog pod moves, and on a node with no read positions
+  `readFrom: end` seeks to the end of the file bodylog is writing -- everything
+  already in today's file is then never shipped, silently. The update strategy is
+  `Recreate`, and `ReadWriteOnce` makes a second reader on the same positions
+  impossible anyway.
+- **When VictoriaLogs is down.** The sink retries without limit, and
+  acknowledgements hold the read position until a record is durable, so an outage
+  pauses reading rather than advancing past records that never arrived. With the
+  default disk buffer (`vector.buffer`, 8GiB) "durable" means written to that
+  buffer, which sits on the same claim as the read positions. Two things follow:
+  records already buffered survive Vector restarting in the middle of an outage,
+  and Vector's memory stays bounded by the buffer instead of by how long the
+  outage lasts. A memory buffer loses what it holds when the pod restarts, and by
+  then bodylog may have archived and deleted the file those records came from --
+  at which point they are gone. How much of an outage the buffer absorbs is
+  `maxSize` over the record rate (~4 hours at 2GB/hour); past that, `whenFull`
+  decides: `block` stops reading, `drop_newest` keeps reading and loses the
+  overflow.
 - **Each record** is transformed by [`files/bodylog.vrl`](files/bodylog.vrl)
   (override with `vector.vrl`): all fields are kept; `model`, `prompt_tokens`,
   `completion_tokens` and `total_tokens` are lifted out of the response; `_msg` gets
@@ -139,7 +162,12 @@ NOT resp_meta.finish_reason:"stop"
 | `vector.timeField` | `ts` | empty stamps entries with ship time |
 | `vector.streamFields` | `[method, status, model]` | |
 | `vector.vrl` | `""` | replaces `files/bodylog.vrl` |
-| `vector.checkpointHostPath` | `/var/lib/<release>` | |
+| `vector.state.size` | `10Gi` | read positions + the disk buffer; must exceed `vector.buffer.maxSize` |
+| `vector.state.storageClass` | `""` | the cluster's default class |
+| `vector.state.existingClaim` / `.hostPath` | `""` | bring your own claim, or fall back to a node directory |
+| `vector.buffer.type` | `disk` | `memory` stops reading during an outage and holds bodylog's disk |
+| `vector.buffer.maxSize` | `8GiB` | how much of an outage Vector absorbs |
+| `vector.buffer.whenFull` | `block` | `drop_newest` to keep reading and lose the overflow |
 | `grafana.datasource.enabled` | `true` | |
 | `grafana.datasource.namespace` | `monitoring` | Grafana's namespace |
 | `test.expectRecordsWithin` | `""` | e.g. `1h` |
