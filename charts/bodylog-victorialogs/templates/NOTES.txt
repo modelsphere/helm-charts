@@ -15,7 +15,7 @@ pod, so when the bodylog pod moves Vector restarts with none and skips ahead; a
 claim (vector.state.existingClaim, or the default) does follow it.
 {{- else if eq .Values.vector.buffer.type "disk" }}
 
-Read positions and a {{ .Values.vector.buffer.maxSize }}-byte disk buffer are on PVC {{ include "bodylog-victorialogs.stateClaimName" . }}
+Read positions and a {{ int64 (include "bodylog-victorialogs.bytes" .Values.vector.buffer.maxSize | default .Values.vector.buffer.maxSize) }}-byte disk buffer are on PVC {{ include "bodylog-victorialogs.stateClaimName" . }}
 ({{ .Values.vector.state.size }}). That buffer is how long a VictoriaLogs outage Vector can absorb
 without stopping to read -- and without holding on to bodylog's disk.
 {{- end }}
