@@ -220,6 +220,34 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/bodylog-exporter-0.2.6/bodylog-exporter-0.2.6.tgz
     version: 0.2.6
+  bodylog-victorialogs:
+  - apiVersion: v2
+    appVersion: v1.53.0
+    created: "2026-10-15T03:12:49.002491622Z"
+    dependencies:
+    - alias: victorialogs
+      condition: victorialogs.enabled
+      name: victoria-logs-single
+      repository: oci://ghcr.io/victoriametrics/helm-charts
+      version: 0.13.10
+    description: 'Searchable body logs: Vector ships bodylog''s JSONL into VictoriaLogs,
+      registered as a Grafana datasource'
+    digest: 17fdf777083da6d043c901d181dd553e297ba69f47c031e0e6aabab6c910c8f3
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - victorialogs
+    - vector
+    - logs
+    name: bodylog-victorialogs
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/VictoriaMetrics/VictoriaLogs
+    - https://github.com/vectordotdev/vector
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/bodylog-victorialogs-0.1.0/bodylog-victorialogs-0.1.0.tgz
+    version: 0.1.0
   cart:
   - apiVersion: v2
     appVersion: v0.6.4
@@ -1826,4 +1854,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-10-15T01:57:16.997584129Z"
+generated: "2026-10-15T03:12:49.002615587Z"
