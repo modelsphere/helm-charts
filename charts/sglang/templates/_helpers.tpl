@@ -135,3 +135,59 @@
 {{- end -}}
 {{- with $labels }}{{ toYaml . }}{{ end -}}
 {{- end -}}
+
+{{/*
+  Merge chart-supplied env entries with user env entries (Values.env), user-wins
+  on duplicate name, emitting a single deduplicated `env:` block.
+
+  The Kubernetes API rejects an env list with two entries of the same name --
+  "duplicate env name" from the server, and server-side apply in particular
+  fails outright rather than resolve last-wins the way the kubelet's $(VAR)
+  expansion does. With the chart's SGLANG_FORCE_SHUTDOWN pair or the cache
+  quartet enabled, a user that duplicates one via Values.env would otherwise
+  produce exactly that broken shape. This helper renders one entry per name
+  so apply succeeds; the user's value wins and the pod runs with it, whatever
+  it is.
+
+  Order: chart entries stay in the order the caller built them -- the
+  hang-watcher's LOG_FILE references $(POD_NS)/$(POD_NAME) declared upstream,
+  so position is load-bearing wherever $(VAR) expansion is used. A user entry
+  overwrites its chart twin IN PLACE so position is stable; non-colliding
+  user entries append at the end. Callers therefore emit their entries in
+  dependency order and treat Values.env as a pure overlay.
+
+  deepCopy of the chart list guards against `set` mutating a list the caller
+  built once but renders more than once (colocate emits the same $engineEnv
+  for two engine containers).
+
+  Emits nothing when both lists are empty, so a chart shape with no
+  chart-managed env and no user env produces no `env:` key at all.
+*/}}
+{{- define "sglang.mergeEnv" -}}
+{{- $indent := .indent | default 2 | int -}}
+{{- $out := list -}}
+{{- range (.chart | default list) -}}
+  {{- $out = mustAppend $out . -}}
+{{- end -}}
+{{- range $u := .user | default list -}}
+  {{- $merged := false -}}
+  {{- $next := list -}}
+  {{- range $e := $out -}}
+    {{- if and (not $merged) (eq $e.name $u.name) -}}
+      {{- $next = mustAppend $next $u -}}
+      {{- $merged = true -}}
+    {{- else -}}
+      {{- $next = mustAppend $next $e -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if $merged -}}
+    {{- $out = $next -}}
+  {{- else -}}
+    {{- $out = mustAppend $out $u -}}
+  {{- end -}}
+{{- end -}}
+{{- if $out }}
+env:
+{{ toYaml $out | indent $indent }}
+{{- end -}}
+{{- end -}}

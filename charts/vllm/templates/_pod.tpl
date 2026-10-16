@@ -404,11 +404,10 @@
     - {{ . | quote }}
     {{- end }}
   {{- end }}
-  {{- /* Env: the chart's own additions, then the user's, last-wins for any
-       duplicate name (Kubernetes accepts duplicate env entries and the
-       kubelet's expansion of $(VAR) uses the LAST value). The chart's
-       pd-only entries are load-bearing for NixlConnector and torch; users
-       overriding them take responsibility for the connector coming up. */}}
+  {{- /* Env is merged by vllm.mergeEnv: one entry per name, user value wins
+       on collision. Chart's pd-only entries are load-bearing for NixlConnector
+       and torch; users overriding them take responsibility for the connector
+       coming up. */}}
   {{- $engineEnv := list }}
   {{- if $pdRole }}
   {{- /* THE load-bearing env for vllm pd. The NIXL handshake embeds this pod's
@@ -451,15 +450,7 @@
         (dict "name" "MOONCAKE_CONFIG_PATH" "value" "/etc/mooncake/store.json")) }}
   {{- end }}
   {{- end }}
-  {{- if or $engineEnv $root.Values.env }}
-  env:
-  {{- if $engineEnv }}
-  {{- toYaml $engineEnv | nindent 4 }}
-  {{- end }}
-  {{- with $root.Values.env }}
-  {{- toYaml . | nindent 4 }}
-  {{- end }}
-  {{- end }}
+  {{- include "vllm.mergeEnv" (dict "chart" $engineEnv "user" $root.Values.env "indent" 4) | nindent 2 }}
   {{- if $serves }}
   ports:
   - containerPort: {{ $httpPort }}
