@@ -103,7 +103,8 @@
 
 {{/*
   Merge chart-supplied env entries with user env entries (Values.env), user-wins
-  on duplicate name, emitting a single deduplicated `env:` block.
+  on duplicate name, emitting a deduplicated item list for the call site to
+  plant under its own `env:` key.
 
   The Kubernetes API rejects an env list with two entries of the same name --
   "duplicate env name" from the server, and server-side apply in particular
@@ -120,16 +121,19 @@
   non-colliding user entries append at the end. Callers therefore emit their
   entries in dependency order and treat Values.env as a pure overlay.
 
-  deepCopy of the chart list guards against `set` mutating a list the caller
-  built once but renders more than once (colocate emits the same $engineEnv
-  for two engine containers).
+  `mustAppend` returns a fresh list on every call, so `$out` is never a
+  mutation of the caller's `$chartEnv` -- colocate renders the same chart
+  list for two engine containers and each render starts from a clean copy.
 
-  Emits nothing when both lists are empty, so a chart shape with no
-  chart-managed env and no user env produces no `env:` key at all (matches
-  the older rendering exactly).
+  Emits the item list only, indented by `padding` (default 2). No leading or
+  trailing newline of its own: the call site owns the `env:` key and how it
+  lines up with surrounding contexts. When both lists are empty the helper
+  emits the empty string, which keeps an unconditional `env:` key legal
+  (`env:` with a null child parses as a null value, matching what the chart
+  emitted before this helper existed).
 */}}
 {{- define "vllm.mergeEnv" -}}
-{{- $indent := .indent | default 2 | int -}}
+{{- $padding := .padding | default 2 | int -}}
 {{- $out := list -}}
 {{- range (.chart | default list) -}}
   {{- $out = mustAppend $out . -}}
@@ -151,8 +155,7 @@
     {{- $out = mustAppend $out $u -}}
   {{- end -}}
 {{- end -}}
-{{- if $out }}
-env:
-{{ toYaml $out | indent $indent }}
+{{- if $out -}}
+{{ toYaml $out | nindent $padding | trimSuffix "\n" }}
 {{- end -}}
 {{- end -}}

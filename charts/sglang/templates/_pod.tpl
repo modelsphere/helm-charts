@@ -381,7 +381,8 @@
         (dict "name" "SGLANG_CACHE_MAX_SLOTS" "value" (printf "%v" ($cache.maxSlotsPerNode | default 8)))
         (dict "name" "SGLANG_CACHE_HISTORY_LIMIT" "value" (printf "%v" ($cache.historyLimit | default 2)))) }}
   {{- end }}
-  {{- include "sglang.mergeEnv" (dict "chart" $chartEnv "user" $root.Values.env "indent" 4) | nindent 2 }}
+  env:
+  {{- include "sglang.mergeEnv" (dict "chart" $chartEnv "user" $root.Values.env "padding" 4) }}
   {{- if $serves }}
   ports:
   - containerPort: {{ $httpPort }}

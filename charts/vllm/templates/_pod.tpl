@@ -450,7 +450,10 @@
         (dict "name" "MOONCAKE_CONFIG_PATH" "value" "/etc/mooncake/store.json")) }}
   {{- end }}
   {{- end }}
-  {{- include "vllm.mergeEnv" (dict "chart" $engineEnv "user" $root.Values.env "indent" 4) | nindent 2 }}
+  {{- if or $engineEnv $root.Values.env }}
+  env:
+  {{- include "vllm.mergeEnv" (dict "chart" $engineEnv "user" $root.Values.env "padding" 4) }}
+  {{- end }}
   {{- if $serves }}
   ports:
   - containerPort: {{ $httpPort }}
