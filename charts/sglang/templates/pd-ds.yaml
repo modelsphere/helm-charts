@@ -280,7 +280,7 @@ spec:
             # stdout carries the identity tuple on success; exit 3 = IP gone
             # from DNS, caller must exclude it; exit 0 covers every "we're
             # done" outcome, including the sentinel fallbacks.
-            local ip=$1 fqdn=$2 budget=${3:-5400} waited=0
+            local ip=$1 fqdn=$2 budget=${3:-5400} cap_silent=600 waited=0 waited_silent=0
             [ "$HW_PORT" -eq 0 ] && {
               echo "router: $ip identity sentinel (hangWatcher disabled at render)" >&2
               echo '|'; return 0
@@ -302,8 +302,11 @@ spec:
               # python3 heredoc: body and terminator sit at the block scalar's
               # own indent, so the rendered yaml strips them to column 0 for
               # bash+python. Exit 0 prints '<restarts>|<ts>' on 200 or '|' on
-              # 404 sentinel; exit 2 on 503 / conn refused / timeout / bad
-              # json = transient, caller retries on its own budget.
+              # 404 sentinel; exit 5 on 503 (sidecar alive, engine still
+              # pinning); exit 2 on everything else transient (RST / timeout /
+              # bad json). The 503 split matters for the silent-time cap
+              # below -- it tells bash "the pod reported something this tick,
+              # so the silence window restarts" without aborting the probe.
               out=$(python3 - "$ip" "$HW_PORT" <<'PY' 2>/dev/null
           import json, sys, urllib.request, urllib.error
           ip, port = sys.argv[1], sys.argv[2]
@@ -314,6 +317,8 @@ spec:
           except urllib.error.HTTPError as e:
               if e.code == 404:
                   print('|')
+              elif e.code == 503:
+                  sys.exit(5)
               else:
                   sys.exit(2)
           except Exception:
@@ -321,6 +326,7 @@ spec:
           PY
           )
               local rrc=$?
+              [ $rrc -eq 5 ] && waited_silent=0
               if [ $rrc -eq 0 ]; then
                 if [ "$out" = '|' ]; then
                   echo "router: $ip identity sentinel (sidecar has no /engine)" >&2
@@ -333,7 +339,21 @@ spec:
                 echo "router: $ip identity probe gave no usable answer after ${budget}s; recording ip||" >&2
                 echo '|'; return 0
               fi
-              sleep 10; waited=$((waited+10))
+              # Cap how long we keep retrying a pod that stays in DNS but
+              # never responds -- a stuck-Terminating pod (node loss, kubelet
+              # never ACKs the delete) keeps resolving forever, so the DNS
+              # membership check can't rescue it. 503s reset this clock because
+              # they mean the pod reported something this tick; only true
+              # silence (RST / timeout / bad json) accumulates toward the cap.
+              # A false-positive drop self-heals: the drift liveness probe
+              # sees the new IP once the pod starts serving /health and
+              # restarts the router container to re-bake argv.
+              if [ $waited_silent -ge $cap_silent ]; then
+                echo "router: $ip silent for ${cap_silent}s;" \
+                     "treating as stuck-Terminating, dropping from argv" >&2
+                return 3
+              fi
+              sleep 10; waited=$((waited+10)); waited_silent=$((waited_silent+10))
             done
           }
           echo "router: slice {{ $s }} resolved prefill: ${PF_IPS:-none}" >&2
