@@ -264,28 +264,48 @@ spec:
           # slop (timeout) also retry on the same budget.
           HW_PORT={{ ternary (int $root.Values.hangWatcher.port) 0 $root.Values.hangWatcher.enabled }}
           probe_identity() {
-            local ip=$1 budget=${2:-5400} waited=0 refused=0
-            # stdout carries the identity tuple on success; exit 3 signals
-            # "hard-refused three probes in a row, drop this IP" so the caller
-            # can rewrite argv without us. All breadcrumb logs go to stderr.
+            # usage: probe_identity <ip> <role-hl-fqdn> [budget]
+            #
+            # Waits for the sidecar /engine on $ip to return a stable identity
+            # tuple. Re-resolves the role's headless name on every iteration:
+            # if the IP has fallen out of DNS, the pod's deletionTimestamp has
+            # finalized and the kubelet has torn it down -- that IP is gone
+            # for good, so the function exits 3 and the caller drops it from
+            # argv + the snapshot. While the IP is still in DNS, every probe
+            # failure (503, conn refused, timeout, bad json) is treated as
+            # warmup and retried on the 90min budget below. Dropping on RST
+            # alone would false-positive on pods whose sandbox exists but
+            # whose containers are still pulling the engine image.
+            #
+            # stdout carries the identity tuple on success; exit 3 = IP gone
+            # from DNS, caller must exclude it; exit 0 covers every "we're
+            # done" outcome, including the sentinel fallbacks.
+            local ip=$1 fqdn=$2 budget=${3:-5400} waited=0
             [ "$HW_PORT" -eq 0 ] && {
               echo "router: $ip identity sentinel (hangWatcher disabled at render)" >&2
               echo '|'; return 0
             }
             while :; do
+              # Re-resolve without short-circuiting on resolver failure: a
+              # DNS blip returns nothing and would look like "pod is gone"
+              # if we trusted the pipeline's exit alone. Compare the resolved
+              # list as text -- a genuine drop is "ip not in the list AND the
+              # list itself is non-empty or empty-by-design".
+              local resolved_now
+              resolved_now=$(getent hosts "$fqdn" 2>/dev/null | awk '{print $1}' | sort -u)
+              if [ -n "$resolved_now" ] && ! printf '%s\n' "$resolved_now" | grep -qx "$ip"; then
+                echo "router: $ip no longer advertised by $fqdn (now: $resolved_now);" \
+                     "treating as terminating pod, dropping from argv" >&2
+                return 3
+              fi
               local out
               # python3 heredoc: body and terminator sit at the block scalar's
               # own indent, so the rendered yaml strips them to column 0 for
               # bash+python. Exit 0 prints '<restarts>|<ts>' on 200 or '|' on
-              # 404 sentinel; exit 3 on ECONNREFUSED (caller counts consecutive
-              # refusals); exit 2 on 503 / timeout / bad json = transient,
-              # caller retries on its own budget. Splitting refused from the
-              # warmup bucket is what stops a terminating pod's ghost IP --
-              # still advertised by the headless Service because
-              # publishNotReadyAddresses=true -- from pinning the router for
-              # the full identity budget.
+              # 404 sentinel; exit 2 on 503 / conn refused / timeout / bad
+              # json = transient, caller retries on its own budget.
               out=$(python3 - "$ip" "$HW_PORT" <<'PY' 2>/dev/null
-          import errno, json, sys, urllib.request, urllib.error
+          import json, sys, urllib.request, urllib.error
           ip, port = sys.argv[1], sys.argv[2]
           try:
               r = urllib.request.urlopen(f"http://{ip}:{port}/engine", timeout=5)
@@ -296,27 +316,11 @@ spec:
                   print('|')
               else:
                   sys.exit(2)
-          except urllib.error.URLError as e:
-              if isinstance(e.reason, ConnectionRefusedError) or \
-                 (isinstance(e.reason, OSError) and e.reason.errno == errno.ECONNREFUSED):
-                  sys.exit(3)
-              sys.exit(2)
           except Exception:
               sys.exit(2)
           PY
           )
               local rrc=$?
-              if [ $rrc -eq 3 ]; then
-                refused=$((refused+1))
-                if [ $refused -ge 3 ]; then
-                  echo "router: $ip sidecar refused /engine $refused times in a row" \
-                       "(~$((refused*5))s); treating as terminating pod, dropping from argv" >&2
-                  return 3
-                fi
-                sleep 5; waited=$((waited+5))
-                continue
-              fi
-              refused=0
               if [ $rrc -eq 0 ]; then
                 if [ "$out" = '|' ]; then
                   echo "router: $ip identity sentinel (sidecar has no /engine)" >&2
@@ -336,13 +340,17 @@ spec:
           echo "router: slice {{ $s }} resolved decode:  ${DC_IPS:-none}" >&2
           install -d -m 0755 /run/pd-router
           write_role_snapshot() {
-            # Writes /run/pd-router/<role>-ips; echoes the kept IPs on stdout
-            # so caller can capture the filtered list for argv construction.
-            local role=$1 ips=$2
+            # usage: write_role_snapshot <role> <hl-fqdn> <ips>
+            #
+            # Writes /run/pd-router/<role>-ips and echoes the kept IPs on
+            # stdout so the caller can capture the filtered list for argv.
+            # IPs whose probe_identity returns 3 (no longer in DNS) are
+            # excluded from both.
+            local role=$1 fqdn=$2 ips=$3
             local T=$(mktemp -p /run/pd-router)
             local ip id kept=""
             for ip in $ips; do
-              if id=$(probe_identity "$ip"); then
+              if id=$(probe_identity "$ip" "$fqdn"); then
                 printf '%s|%s\n' "$ip" "$id" >>"$T"
                 kept="$kept $ip"
               fi
@@ -350,8 +358,8 @@ spec:
             mv "$T" "/run/pd-router/${role}-ips"
             echo "${kept# }"
           }
-          PF_KEPT=$(write_role_snapshot prefill "$PF_IPS")
-          DC_KEPT=$(write_role_snapshot decode  "$DC_IPS")
+          PF_KEPT=$(write_role_snapshot prefill "$PF_HL" "$PF_IPS")
+          DC_KEPT=$(write_role_snapshot decode  "$DC_HL" "$DC_IPS")
           if [ -z "$PF_KEPT" ] || [ -z "$DC_KEPT" ]; then
             echo "router: slice {{ $s }} after dead-ip filter: prefill='${PF_KEPT:-none}', decode='${DC_KEPT:-none}';" \
                  "returning to DNS resolve (attempt $i/60)" >&2
