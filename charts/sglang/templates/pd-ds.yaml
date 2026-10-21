@@ -227,23 +227,19 @@ spec:
           # ones.
           PF_HL={{ $fullname }}-prefill-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
           DC_HL={{ $fullname }}-decode-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
+          # One loop wraps resolve + identity probe + argv build: an IP that
+          # hard-refuses its sidecar probe (terminating pod still advertised
+          # by the headless service) is dropped from argv, and if that empties
+          # a role we fall back here to re-resolve, not exit. Liveness probe
+          # handles drift after exec; this loop only cares about boot.
           for i in $(seq 1 60); do
             PF_IPS=$(getent hosts "$PF_HL" | awk '{print $1}' | sort -u)
             DC_IPS=$(getent hosts "$DC_HL" | awk '{print $1}' | sort -u)
-            [ -n "$PF_IPS" ] && [ -n "$DC_IPS" ] && break
-            echo "router: slice {{ $s }} upstreams not yet resolving (prefill: '${PF_IPS:-none}', decode: '${DC_IPS:-none}'; attempt $i)"
-            sleep 5
-          done
-          if [ -z "$PF_IPS" ] || [ -z "$DC_IPS" ]; then
-            echo "router: timed out waiting for slice {{ $s }} upstreams to resolve: prefill '${PF_IPS:-none}', decode '${DC_IPS:-none}'" >&2
-            exit 1
-          fi
-          PF_ARGS=""
-          for ip in $PF_IPS; do PF_ARGS="$PF_ARGS --prefill http://$ip:{{ $pd.prefill.httpPort | default 30001 }} {{ $pd.prefill.bootstrapPort | default 8998 }}"; done
-          DC_ARGS=""
-          for ip in $DC_IPS; do DC_ARGS="$DC_ARGS --decode http://$ip:{{ $pd.decode.httpPort | default 30002 }}"; done
-          echo "router: prefill$PF_ARGS"
-          echo "router: decode $DC_ARGS"
+            if [ -z "$PF_IPS" ] || [ -z "$DC_IPS" ]; then
+              echo "router: slice {{ $s }} upstreams not yet resolving (prefill: '${PF_IPS:-none}', decode: '${DC_IPS:-none}'; attempt $i/60)" >&2
+              sleep 5
+              continue
+            fi
           # Persist the boot-time upstream set for the liveness drift probe.
           # Router argv is immutable for the life of the process, so the file
           # is the probe's only handle on "what upstreams were baked in".
@@ -268,10 +264,10 @@ spec:
           # slop (timeout) also retry on the same budget.
           HW_PORT={{ ternary (int $root.Values.hangWatcher.port) 0 $root.Values.hangWatcher.enabled }}
           probe_identity() {
-            local ip=$1 budget=${2:-5400} waited=0
-            # The function returns the tuple on stdout; all breadcrumb logs
-            # go to stderr so they land in the container log instead of
-            # polluting the captured return value.
+            local ip=$1 budget=${2:-5400} waited=0 refused=0
+            # stdout carries the identity tuple on success; exit 3 signals
+            # "hard-refused three probes in a row, drop this IP" so the caller
+            # can rewrite argv without us. All breadcrumb logs go to stderr.
             [ "$HW_PORT" -eq 0 ] && {
               echo "router: $ip identity sentinel (hangWatcher disabled at render)" >&2
               echo '|'; return 0
@@ -281,10 +277,15 @@ spec:
               # python3 heredoc: body and terminator sit at the block scalar's
               # own indent, so the rendered yaml strips them to column 0 for
               # bash+python. Exit 0 prints '<restarts>|<ts>' on 200 or '|' on
-              # 404 sentinel; exit 2 on 503 / conn refused / timeout / bad
-              # json = transient, caller retries on its own budget.
+              # 404 sentinel; exit 3 on ECONNREFUSED (caller counts consecutive
+              # refusals); exit 2 on 503 / timeout / bad json = transient,
+              # caller retries on its own budget. Splitting refused from the
+              # warmup bucket is what stops a terminating pod's ghost IP --
+              # still advertised by the headless Service because
+              # publishNotReadyAddresses=true -- from pinning the router for
+              # the full identity budget.
               out=$(python3 - "$ip" "$HW_PORT" <<'PY' 2>/dev/null
-          import json, sys, urllib.request, urllib.error
+          import errno, json, sys, urllib.request, urllib.error
           ip, port = sys.argv[1], sys.argv[2]
           try:
               r = urllib.request.urlopen(f"http://{ip}:{port}/engine", timeout=5)
@@ -295,11 +296,27 @@ spec:
                   print('|')
               else:
                   sys.exit(2)
+          except urllib.error.URLError as e:
+              if isinstance(e.reason, ConnectionRefusedError) or \
+                 (isinstance(e.reason, OSError) and e.reason.errno == errno.ECONNREFUSED):
+                  sys.exit(3)
+              sys.exit(2)
           except Exception:
               sys.exit(2)
           PY
           )
               local rrc=$?
+              if [ $rrc -eq 3 ]; then
+                refused=$((refused+1))
+                if [ $refused -ge 3 ]; then
+                  echo "router: $ip sidecar refused /engine $refused times in a row" \
+                       "(~$((refused*5))s); treating as terminating pod, dropping from argv" >&2
+                  return 3
+                fi
+                sleep 5; waited=$((waited+5))
+                continue
+              fi
+              refused=0
               if [ $rrc -eq 0 ]; then
                 if [ "$out" = '|' ]; then
                   echo "router: $ip identity sentinel (sidecar has no /engine)" >&2
@@ -315,19 +332,38 @@ spec:
               sleep 10; waited=$((waited+10))
             done
           }
+          echo "router: slice {{ $s }} resolved prefill: ${PF_IPS:-none}" >&2
+          echo "router: slice {{ $s }} resolved decode:  ${DC_IPS:-none}" >&2
           install -d -m 0755 /run/pd-router
           write_role_snapshot() {
+            # Writes /run/pd-router/<role>-ips; echoes the kept IPs on stdout
+            # so caller can capture the filtered list for argv construction.
             local role=$1 ips=$2
             local T=$(mktemp -p /run/pd-router)
-            local ip id
+            local ip id kept=""
             for ip in $ips; do
-              id=$(probe_identity "$ip")
-              printf '%s|%s\n' "$ip" "$id" >>"$T"
+              if id=$(probe_identity "$ip"); then
+                printf '%s|%s\n' "$ip" "$id" >>"$T"
+                kept="$kept $ip"
+              fi
             done
             mv "$T" "/run/pd-router/${role}-ips"
+            echo "${kept# }"
           }
-          write_role_snapshot prefill "$PF_IPS"
-          write_role_snapshot decode  "$DC_IPS"
+          PF_KEPT=$(write_role_snapshot prefill "$PF_IPS")
+          DC_KEPT=$(write_role_snapshot decode  "$DC_IPS")
+          if [ -z "$PF_KEPT" ] || [ -z "$DC_KEPT" ]; then
+            echo "router: slice {{ $s }} after dead-ip filter: prefill='${PF_KEPT:-none}', decode='${DC_KEPT:-none}';" \
+                 "returning to DNS resolve (attempt $i/60)" >&2
+            sleep 5
+            continue
+          fi
+          PF_ARGS=""
+          for ip in $PF_KEPT; do PF_ARGS="$PF_ARGS --prefill http://$ip:{{ $pd.prefill.httpPort | default 30001 }} {{ $pd.prefill.bootstrapPort | default 8998 }}"; done
+          DC_ARGS=""
+          for ip in $DC_KEPT; do DC_ARGS="$DC_ARGS --decode http://$ip:{{ $pd.decode.httpPort | default 30002 }}"; done
+          echo "router: prefill$PF_ARGS"
+          echo "router: decode $DC_ARGS"
           echo "router: boot script done, exec into router" >&2
           # shellcheck disable=SC2086
           exec python3 -m sglang_router.launch_router \
@@ -337,6 +373,9 @@ spec:
             --model-path {{ $root.Values.model.mountPath }} \
             --host 0.0.0.0 \
             --port {{ $root.Values.service.port }}
+          done
+          echo "router: exhausted 60 resolve+filter cycles without a usable upstream set" >&2
+          exit 1
         {{- /* The router's only read of "am I useful" is answering "is at
                least one engine of each role taking HTTP behind me". exec to
                avoid depending on the router's own /health (which cannot see
