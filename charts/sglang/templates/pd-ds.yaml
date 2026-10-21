@@ -293,7 +293,7 @@ spec:
               # list itself is non-empty or empty-by-design".
               local resolved_now
               resolved_now=$(getent hosts "$fqdn" 2>/dev/null | awk '{print $1}' | sort -u)
-              if [ -n "$resolved_now" ] && ! printf '%s\n' "$resolved_now" | grep -qx "$ip"; then
+              if [ -n "$resolved_now" ] && ! printf '%s\n' "$resolved_now" | grep -qxF "$ip"; then
                 echo "router: $ip no longer advertised by $fqdn (now: $resolved_now);" \
                      "treating as terminating pod, dropping from argv" >&2
                 return 3
