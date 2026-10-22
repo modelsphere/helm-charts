@@ -656,7 +656,7 @@ lifecycle:
 scaler:
   enabled: true
   minReplicas: 1
-  maxReplicas: 5
+  maxReplicas: 1000
   syncPeriodSeconds: 10
 
   # Where the scaling signal comes from. The two are alternatives, not layers,
