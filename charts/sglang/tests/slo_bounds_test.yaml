@@ -1,0 +1,70 @@
+# decision-gen skips a requirement without maximumDeployment, so while the scaler
+# reads a decision server the chart fills both bounds from the scaler range.
+suite: SLO requirement replica bounds follow the scaler
+templates:
+  - templates/llmslorequirement.yaml
+release:
+  name: ci
+set:
+  modelRoute.nginx.outputConfigMap: ci/openresty-conf
+tests:
+  - it: defaults both bounds to the scaler range under the Custom provider
+    set:
+      scaler.minReplicas: 2
+      scaler.maxReplicas: 4
+    asserts:
+      - equal:
+          path: spec.minimumDeployment
+          value: {type: replica, value: 2}
+      - equal:
+          path: spec.maximumDeployment
+          value: {type: replica, value: 4}
+
+  - it: lets extraSpec override either bound
+    set:
+      scaler.maxReplicas: 4
+      sloRequirement.extraSpec:
+        maximumDeployment: {type: replica, value: 8}
+    asserts:
+      - equal:
+          path: spec.maximumDeployment
+          value: {type: replica, value: 8}
+      - equal:
+          path: spec.minimumDeployment
+          value: {type: replica, value: 1}
+
+  - it: renders a scaler minimum of 0 as the CRD floor of 1
+    set:
+      scaler.minReplicas: 0
+    asserts:
+      - equal:
+          path: spec.minimumDeployment.value
+          value: 1
+
+  - it: leaves the bounds out when the scaler is off, so the service is not autoscaled
+    set:
+      scaler.enabled: false
+    asserts:
+      - notExists:
+          path: spec.minimumDeployment
+      - notExists:
+          path: spec.maximumDeployment
+
+  - it: leaves the bounds out under the Prometheus provider, which reads no decision
+    set:
+      scaler.metricProvider: Prometheus
+      scaler.serverAddress: http://prometheus:9090
+    asserts:
+      - notExists:
+          path: spec.maximumDeployment
+
+  - it: keeps the rest of extraSpec
+    set:
+      sloRequirement.extraSpec:
+        priority: 5
+    asserts:
+      - equal:
+          path: spec.priority
+          value: 5
+      - exists:
+          path: spec.maximumDeployment

@@ -870,6 +870,12 @@ sloRequirement:
   # The rest of spec, passed through verbatim (latency targets and whatever else
   # the operator grows). Open by design: that schema belongs to the inference
   # operator, and a chart change per field would only lag it.
+  #
+  # minimumDeployment / maximumDeployment default to scaler.minReplicas /
+  # scaler.maxReplicas while the scaler reads a decision server
+  # (scaler.enabled, metricProvider: Custom); set either here to override it.
+  # Without latency targets (ttft / otps) the decision server can still scale up
+  # on rejections, but never scales down.
   extraSpec: {}
     # ttftMs: 20000
     # tpotMs: 100

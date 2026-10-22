@@ -4,6 +4,19 @@
 {{- if hasKey ($slo.extraSpec | default dict) "serviceId" }}
 {{- fail "vllm: sloRequirement.extraSpec must not carry serviceId -- it comes from sloRequirement.serviceId (which defaults to the top-level serviceId), and a second copy renders a duplicate YAML key rather than an override" }}
 {{- end }}
+{{- /*
+  Replica bounds. decision-gen manages only a service whose requirement carries
+  maximumDeployment (a missing one means "not autoscaled"), and picks replicas
+  within [minimumDeployment, maximumDeployment]; the LLMScaler then clamps that
+  to [scaler.minReplicas, scaler.maxReplicas]. Left to extraSpec alone, a release
+  that sets only the scaler range is never scaled. So when the scaler reads a
+  decision server (Custom provider), both bounds default to the scaler's range.
+  A bound in extraSpec still wins. The CRD floors both at 1, so a scaler
+  minimum of 0 renders as 1.
+*/}}
+{{- $extra := $slo.extraSpec | default dict }}
+{{- $s := .Values.scaler | default dict }}
+{{- $fromScaler := and $s.enabled (eq ($s.metricProvider | default "Prometheus") "Custom") }}
 apiVersion: inference.modelsphere.dev/v1alpha1
 kind: LLMSLORequirement
 metadata:
@@ -17,6 +30,16 @@ metadata:
   {{- end }}
 spec:
   serviceId: {{ $serviceId | quote }}
+  {{- if and $fromScaler (not (hasKey $extra "minimumDeployment")) }}
+  minimumDeployment:
+    type: replica
+    value: {{ max 1 ($s.minReplicas | int) }}
+  {{- end }}
+  {{- if and $fromScaler (not (hasKey $extra "maximumDeployment")) }}
+  maximumDeployment:
+    type: replica
+    value: {{ max 1 ($s.maxReplicas | int) }}
+  {{- end }}
   {{- with $slo.extraSpec }}
   {{- toYaml . | nindent 2 }}
   {{- end }}
