@@ -395,6 +395,30 @@ entries:
     version: 0.1.0
   console:
   - apiVersion: v2
+    appVersion: 0.2.1
+    created: "2026-10-22T06:11:44.016631519Z"
+    dependencies:
+    - condition: swiss.enabled
+      name: swiss
+      repository: oci://ghcr.io/modelsphere/charts
+      version: 0.6.3
+    description: ModelSphere community portal — identity (users, roles, login) and
+      a federation gateway to Swiss and other backends.
+    digest: 027de9d00b7c468fb3976392052c19947eddae2c1b0bc2e8b5201473205a1203
+    home: https://github.com/modelsphere/console
+    keywords:
+    - console
+    - llm
+    - inference
+    - portal
+    name: console
+    sources:
+    - https://github.com/modelsphere/console
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/console-0.2.1/console-0.2.1.tgz
+    version: 0.2.1
+  - apiVersion: v2
     appVersion: 0.1.2
     created: "2026-10-08T15:04:29.709627558Z"
     dependencies:
@@ -693,6 +717,29 @@ entries:
     - https://github.com/modelsphere/helm-charts/releases/download/llm-slo-decision-gen-0.1.1/llm-slo-decision-gen-0.1.1.tgz
     version: 0.1.1
   llmscaleoperator:
+  - apiVersion: v2
+    appVersion: 0.5.0
+    created: "2026-10-22T06:11:44.279786183Z"
+    description: 'Kubernetes operator that autoscales LLM inference workloads on LLM-specific
+      signals -- KV-cache utilization, queue depth, TPM/capacity load -- rather than
+      CPU and memory. An HPA specialized for token serving.  Ships the LLMScaler CRD
+      (autoscaling.modelsphere.dev/v1alpha1), the LLMService CRD (serving.modelsphere.dev/v1alpha1)
+      and the controller that reconciles them. The SLO storage side lives in the llm-slo-decision-gen
+      chart; the two are independent, and this one is what you need for autoscaling
+      alone.  Generated from the llm-operator repo (dist/chart, kubebuilder helm plugin)
+      and maintained here, because this is where charts are published from. '
+    digest: c69a3a3f7bfa920e77ec4926c165c12116f1fca6f32b845482d88690f17d56d5
+    keywords:
+    - llm
+    - autoscaling
+    - operator
+    - vllm
+    - sglang
+    name: llmscaleoperator
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/llmscaleoperator-0.5.0/llmscaleoperator-0.5.0.tgz
+    version: 0.5.0
   - apiVersion: v2
     appVersion: 0.4.0
     created: "2026-09-25T03:28:19.797287864Z"
@@ -1733,6 +1780,19 @@ entries:
     version: 0.7.0
   swiss:
   - apiVersion: v2
+    appVersion: 0.7.0
+    created: "2026-10-22T06:11:44.569436619Z"
+    description: 'swissd -- the Swiss deploy control plane for the sglang and vllm
+      charts. One instance per cluster, running inside the cluster it manages: it
+      reads the model catalog over HTTP, reads this cluster''s releases and nodes
+      through its own ServiceAccount, and serves the web UI embedded in its binary.'
+    digest: 5f29c321164bad1619c5924c16464fbb4064ec0f164d2d866e9d40de3047334f
+    name: swiss
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/swiss-0.7.0/swiss-0.7.0.tgz
+    version: 0.7.0
+  - apiVersion: v2
     appVersion: 0.6.3
     created: "2026-10-08T15:57:15.976823816Z"
     description: 'swissd -- the Swiss deploy control plane for the sglang and vllm
@@ -2428,4 +2488,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-10-22T02:51:30.21001195Z"
+generated: "2026-10-22T06:11:44.569676605Z"
