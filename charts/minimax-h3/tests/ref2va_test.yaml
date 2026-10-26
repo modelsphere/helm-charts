@@ -128,8 +128,7 @@ tests:
           content: "16"
       - contains:
           path: spec.template.spec.volumes
-          content: {name: ref2va-lora, hostPath: {path: /models/lightx2v/Minimax-h3-Turbo}}
-          any: true
+          content: {name: ref2va-lora, hostPath: {path: /models/lightx2v/Minimax-h3-Turbo, type: Directory}}
       - contains:
           path: spec.template.spec.volumes
           content: {name: extra, emptyDir: {}}
