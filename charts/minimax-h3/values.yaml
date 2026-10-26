@@ -140,7 +140,7 @@ sglang:
   enabled: true
   image:
     repository: lmsysorg/sglang
-    tag: v0.5.18-cu129
+    tag: v0.5.19
     pullPolicy: IfNotPresent
   service: {port: 30010}
   gpuCount: 4
