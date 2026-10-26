@@ -1,0 +1,209 @@
+# The two capability pools render as separate Deployments. Ref2VA carries the
+# Turbo LoRA, its sampling env and a guard init container; FL2VA carries none of
+# it. Values the chart owns (LoRA, warmup, sampling env, the /lora mount) refuse
+# a second copy from extraArgs / extraEnv / extraVolumes instead of rendering
+# both.
+suite: ref2va turbo and pool separation
+release:
+  name: ci
+templates:
+  - templates/server-deployment.yaml
+set:
+  database.url: postgresql://unused
+tests:
+  - it: fl2va renders none of the Ref2VA Turbo profile
+    documentSelector:
+      # A Service shares the Deployment's name and labels; only the Deployment has a pod template.
+      path: spec.template.metadata.labels["minimax-h3/pool"]
+      value: fl2va
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args
+          value: [--model-type, diffusion, --model-path, /model, --model-subfolder, ., --pipeline-class-name, MiniMaxH3Pipeline,
+                  --trust-remote-code, "true", --num-gpus, "4", --tp-size, "4", --ulysses-degree, "1", --encoder-parallel, auto,
+                  --performance-mode, speed, --enable-torch-compile, "false", --output-path, /data/minimax-h3/sglang-output,
+                  --host, 0.0.0.0, --port, "30010"]
+      - notContains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_REF2VA_NUM_INFERENCE_STEPS}
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: ref2va-lora}
+          any: true
+      - notExists:
+          path: spec.template.spec.initContainers
+
+  - it: ref2va renders the Turbo LoRA and a two-step request warmup by default
+    documentSelector:
+      # A Service shares the Deployment's name and labels; only the Deployment has a pod template.
+      path: spec.template.metadata.labels["minimax-h3/pool"]
+      value: ref2va
+    asserts:
+      # H3 rejects one-point sigma schedules, request warmup included: warmup-steps must be >= 2.
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args
+          value: [--model-type, diffusion, --model-path, /model, --model-subfolder, ., --pipeline-class-name, MiniMaxH3Pipeline,
+                  --trust-remote-code, "true", --num-gpus, "4", --tp-size, "4", --ulysses-degree, "1", --encoder-parallel, auto,
+                  --performance-mode, speed, --enable-torch-compile, "false", --output-path, /data/minimax-h3/sglang-output,
+                  --host, 0.0.0.0, --port, "30010", --warmup-mode, request, --warmup-steps, "2",
+                  --lora-path, /lora, --lora-weight-name, minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors,
+                  --lora-nickname, h3-ref2va-turbo, --lora-scale, "1", --lora-alpha, "8", --lora-merge-mode, auto]
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_REF2VA_NUM_INFERENCE_STEPS, value: "9"}
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_REF2VA_FLOW_SHIFT, value: "6"}
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_REF2VA_AUDIO_FLOW_SHIFT, value: "3"}
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "sglang")].volumeMounts
+          content: {name: ref2va-lora, mountPath: /lora, readOnly: true}
+          any: true
+
+  - it: extraArgs append after the managed profile with Turbo on
+    set:
+      pools.ref2va.sglang.extraArgs: [--log-level, debug]
+    documentSelector:
+      # A Service shares the Deployment's name and labels; only the Deployment has a pod template.
+      path: spec.template.metadata.labels["minimax-h3/pool"]
+      value: ref2va
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args
+          value: [--model-type, diffusion, --model-path, /model, --model-subfolder, ., --pipeline-class-name, MiniMaxH3Pipeline,
+                  --trust-remote-code, "true", --num-gpus, "4", --tp-size, "4", --ulysses-degree, "1", --encoder-parallel, auto,
+                  --performance-mode, speed, --enable-torch-compile, "false", --output-path, /data/minimax-h3/sglang-output,
+                  --host, 0.0.0.0, --port, "30010", --warmup-mode, request, --warmup-steps, "2",
+                  --lora-path, /lora, --lora-weight-name, minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors,
+                  --lora-nickname, h3-ref2va-turbo, --lora-scale, "1", --lora-alpha, "8", --lora-merge-mode, auto,
+                  --log-level, debug]
+
+  - it: extraArgs append after the managed profile with Turbo off, which drops the LoRA but keeps the warmup
+    set:
+      pools.ref2va.turbo.enabled: false
+      pools.ref2va.sglang.extraArgs: [--log-level, debug]
+    documentSelector:
+      # A Service shares the Deployment's name and labels; only the Deployment has a pod template.
+      path: spec.template.metadata.labels["minimax-h3/pool"]
+      value: ref2va
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args
+          value: [--model-type, diffusion, --model-path, /model, --model-subfolder, ., --pipeline-class-name, MiniMaxH3Pipeline,
+                  --trust-remote-code, "true", --num-gpus, "4", --tp-size, "4", --ulysses-degree, "1", --encoder-parallel, auto,
+                  --performance-mode, speed, --enable-torch-compile, "false", --output-path, /data/minimax-h3/sglang-output,
+                  --host, 0.0.0.0, --port, "30010", --warmup-mode, request, --warmup-steps, "2",
+                  --log-level, debug]
+      - notContains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_REF2VA_NUM_INFERENCE_STEPS}
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: ref2va-lora}
+          any: true
+
+  - it: a custom LoRA, sampling profile and unrelated mounts are carried through
+    set:
+      pools.ref2va.turbo.lora: {hostPath: /models/lightx2v/Minimax-h3-Turbo, weightName: custom.safetensors, scale: 0.5, alpha: 16}
+      pools.ref2va.turbo.sampling: {numInferenceSteps: "9.0", flowShift: 7, audioFlowShift: 4}
+      pools.ref2va.sglang.extraVolumes: [{name: extra, emptyDir: {}}]
+      pools.ref2va.sglang.extraVolumeMounts: [{name: extra, mountPath: /extra}]
+    documentSelector:
+      # A Service shares the Deployment's name and labels; only the Deployment has a pod template.
+      path: spec.template.metadata.labels["minimax-h3/pool"]
+      value: ref2va
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args
+          content: custom.safetensors
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args
+          content: "0.5"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args
+          content: "16"
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: ref2va-lora, hostPath: {path: /models/lightx2v/Minimax-h3-Turbo}}
+          any: true
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: extra, emptyDir: {}}
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "sglang")].volumeMounts
+          content: {name: extra, mountPath: /extra}
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_REF2VA_NUM_INFERENCE_STEPS, value: "9.0"}
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_REF2VA_FLOW_SHIFT, value: "7"}
+
+  - it: the guard init container runs the server image, without a GPU, with Turbo on
+    set:
+      server.image: {tag: rebuilt, pullPolicy: Always}
+    documentSelector:
+      # A Service shares the Deployment's name and labels; only the Deployment has a pod template.
+      path: spec.template.metadata.labels["minimax-h3/pool"]
+      value: ref2va
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: 4pdosc/minimax-h3-server:rebuilt
+      - equal:
+          path: spec.template.spec.initContainers[0].imagePullPolicy
+          value: Always
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "server")].image
+          value: 4pdosc/minimax-h3-server:rebuilt
+      - notExists:
+          path: spec.template.spec.initContainers[0].resources.limits["nvidia.com/gpu"]
+
+  - it: the guard init container still runs in base mode
+    set:
+      pools.ref2va.turbo.enabled: false
+      server.image: {tag: rebuilt, pullPolicy: Always}
+    documentSelector:
+      # A Service shares the Deployment's name and labels; only the Deployment has a pod template.
+      path: spec.template.metadata.labels["minimax-h3/pool"]
+      value: ref2va
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: 4pdosc/minimax-h3-server:rebuilt
+      - equal:
+          path: spec.template.spec.initContainers[0].imagePullPolicy
+          value: Always
+      - notExists:
+          path: spec.template.spec.initContainers[0].resources.limits["nvidia.com/gpu"]
+
+  - it: an external SGLang backend is refused for Turbo
+    set:
+      sglang.enabled: false
+      server.externalSglangUrl: http://backend:30010
+    asserts:
+      - failedTemplate:
+          errorPattern: external Turbo backends are not supported
+
+  - it: an external SGLang backend is allowed in base mode, leaving only the server container
+    set:
+      sglang.enabled: false
+      server.externalSglangUrl: http://backend:30010
+      pools.ref2va.turbo.enabled: false
+    documentSelector:
+      # A Service shares the Deployment's name and labels; only the Deployment has a pod template.
+      path: spec.template.metadata.labels["minimax-h3/pool"]
+      value: ref2va
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: server
+      - exists:
+          path: spec.template.spec.initContainers

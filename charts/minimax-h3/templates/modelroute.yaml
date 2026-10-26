@@ -1,0 +1,59 @@
+{{- if .Values.modelRoute.enabled }}
+{{- /*
+  video 型 ModelRoute:autoconfig 据此渲染出 openresty 的路由 conf 并热更。
+
+  CR **住在本 release 的 namespace**(不是 openresty 所在的 namespace)——
+  spec 里对 openresty / ConfigMap 的引用都是 `ns/name` 全限定,所以 CR 放哪都行;
+  放在应用自己的 ns 与其它模型服务的做法一致,
+  而且删 release 时路由跟着走,不会留下指向已消失后端的孤儿路由。
+
+  ⚠️ 需要集群里装了 autoconfig(提供 ModelRoute CRD)。没装的环境把 modelRoute.enabled 设为 false。
+*/}}
+{{- if not (and .Values.modelRoute.openrestyService .Values.modelRoute.outputConfigMap) }}
+{{- fail "modelRoute.enabled=true needs modelRoute.openrestyService and modelRoute.outputConfigMap (ns/name of the openresty Service and the ConfigMap autoconfig writes routes into)" }}
+{{- end }}
+{{- $groups := list "routing.gpucluster.io" "routing.modelsphere.dev" }}
+{{- if not (has .Values.modelRoute.apiGroup $groups) }}
+{{- fail (printf "modelRoute.apiGroup must be one of %v, got %q" $groups .Values.modelRoute.apiGroup) }}
+{{- end }}
+{{- $av := printf "%s/v1alpha1" .Values.modelRoute.apiGroup }}
+{{- if not (.Capabilities.APIVersions.Has $av) }}
+{{- fail (printf "this cluster does not serve %s. A cluster still on the old group sets modelRoute.apiGroup=routing.gpucluster.io until its migration; for an offline helm template pass --api-versions %s" $av $av) }}
+{{- end }}
+apiVersion: {{ .Values.modelRoute.apiGroup }}/v1alpha1
+kind: ModelRoute
+metadata:
+  name: {{ .Values.modelRoute.route }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "minimax-h3.labels" . | nindent 4 }}
+spec:
+  # video:渲染成纯反向代理(不进 lua 路由引擎 —— 那套的会话亲和/TPS 限流/自适应并发
+  # 是按 LLM 的流式对话设计的,对"异步建任务 + 轮询 + 大文件下载"不适用甚至有害)
+  modelType: video
+  discovery:
+    {{- if .Values.router.enabled }}
+    # 指 Router 的 Service:它按 capability 把建任务请求分发到对应的池
+    service: {{ .Release.Namespace }}/{{ include "minimax-h3.router.fullname" . }}
+    port: {{ .Values.router.service.port }}
+    {{- else }}
+    # 没部 Router 时直接指跨池共享的 -api Service
+    # (这种形态只允许启用一个能力池,模板另有校验)
+    service: {{ .Release.Namespace }}/{{ include "minimax-h3.server.fullname" . }}-api
+    port: {{ .Values.server.service.port }}
+    {{- end }}
+  nginx:
+    # 对外路径前缀:https://<域名>/<route>/v2/...
+    # dispatch 会**剥掉**这个前缀再转给后端,所以下载 URL 要靠 server.config.publicBaseUrl 带回来
+    route: {{ .Values.modelRoute.route }}
+    service: {{ .Values.modelRoute.openrestyService }}
+    outputConfigMap: {{ .Values.modelRoute.outputConfigMap }}
+    # 只用 backend-svc(Service 的 ClusterIP VIP),不列 pod IP:
+    #   * 负载均衡与健康感知交给 k8s,纯反代不需要 nginx 自己轮询;
+    #   * Router 扩缩/滚动时 conf 内容不变 -> **不触发 openresty reload**
+    #     (openresty 是所有模型共享的入口,列 pod IP 的话 H3 每次滚动都会让它 reload)
+    peers:
+      - use: backend-svc
+    values:
+      {{- toYaml .Values.modelRoute.values | nindent 6 }}
+{{- end }}

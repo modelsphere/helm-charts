@@ -1,0 +1,41 @@
+{{- if and .Values.server.enabled .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "minimax-h3.server.fullname" . }}
+  {{- with .Values.serviceMonitor.namespace }}
+  namespace: {{ . }}
+  {{- end }}
+  labels:
+    {{- include "minimax-h3.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  # 抓 headless Service 的每个 Pod:集群维度的指标各副本报的是同一份值
+  # (它们查同一个库),查询时用 max() 而不是 sum();只有 h3_queue_running_on_instance
+  # 和后端队列是各副本各自的。
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: server
+      # 只选 headless(逐 Pod 抓);否则 ClusterIP / -api 也选到同一批 Pod,会重复抓取
+      minimax-h3/scrape: "true"
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  endpoints:
+    - port: http
+      path: {{ .Values.serviceMonitor.path }}
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+      {{- with .Values.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

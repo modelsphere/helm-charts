@@ -1,0 +1,130 @@
+{{- if .Values.router.enabled }}
+{{- $name := include "minimax-h3.router.fullname" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "minimax-h3.labels" . | nindent 4 }}
+    app.kubernetes.io/component: router
+  {{- with .Values.router.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.router.service.type }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: router
+  ports:
+    - name: http
+      port: {{ .Values.router.service.port }}
+      targetPort: http
+      {{- if and (eq .Values.router.service.type "NodePort") .Values.router.service.nodePort }}
+      nodePort: {{ .Values.router.service.nodePort }}
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "minimax-h3.labels" . | nindent 4 }}
+    app.kubernetes.io/component: router
+spec:
+  replicas: {{ .Values.router.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: router
+  template:
+    metadata:
+      labels:
+        {{- include "minimax-h3.labels" . | nindent 8 }}
+        app.kubernetes.io/component: router
+      {{- with .Values.router.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.router.terminationGracePeriodSeconds | default 60 }}
+      containers:
+        - name: router
+          image: "{{ .Values.router.image.repository }}:{{ .Values.router.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.router.image.pullPolicy }}
+          {{- /* dig 做 nil 安全:helm upgrade --reuse-values 不会带新 chart 的默认键 */}}
+          {{- if dig "preStop" "enabled" false .Values.router }}
+          # lameduck:删除时先睡一会儿,等端点摘除传播完再让进程退,避免在途请求被切
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep {{ dig "preStop" "drainSeconds" 20 .Values.router }}"]
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.router.service.port }}
+          env:
+            # 后端地址 = 各能力池里每个 Pod 的 headless DNS;
+            # router.fl2vaUrls / ref2vaUrls 非空时整体覆盖(接集群外的 Server)
+            - name: H3_FL2VA_SERVICE_URLS
+              value: {{ (.Values.router.fl2vaUrls | default (list) | join ",") | default (include "minimax-h3.poolUrls" (dict "root" . "pool" "fl2va")) | quote }}
+            {{- $refUrls := (.Values.router.ref2vaUrls | default (list) | join ",") | default (include "minimax-h3.poolUrls" (dict "root" . "pool" "ref2va")) }}
+            {{- if $refUrls }}
+            - name: H3_REF2VA_SERVICE_URLS
+              value: {{ $refUrls | quote }}
+            {{- end }}
+            - name: H3_ROUTER_HOST
+              value: "0.0.0.0"
+            - name: H3_ROUTER_PORT
+              value: {{ .Values.router.service.port | quote }}
+            - name: H3_ROUTER_CONNECT_TIMEOUT_SECONDS
+              value: {{ .Values.router.connectTimeoutSeconds | quote }}
+            {{- with .Values.router.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          # Router 无状态、不落盘(镜像本来就是 --read-only 跑的)
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.router.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.router.schedulerName }}
+      schedulerName: {{ . }}
+      {{- end }}
+      {{- with .Values.router.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.router.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.router.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.router.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

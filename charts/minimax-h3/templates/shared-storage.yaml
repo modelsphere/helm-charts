@@ -1,0 +1,20 @@
+{{- if and .Values.sharedStorage.create (or .Values.server.enabled .Values.sglang.enabled) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "minimax-h3.sharedClaim" . }}
+  labels:
+    {{- include "minimax-h3.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - {{ .Values.sharedStorage.accessMode }}
+  {{- /* Omitted when empty: storageClassName "" means "no class" (static PVs only), not the cluster default. */}}
+  {{- with .Values.sharedStorage.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.sharedStorage.size }}
+{{- end }}

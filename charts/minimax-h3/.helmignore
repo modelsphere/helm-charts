@@ -1,0 +1,16 @@
+# helm package 默认会把 chart 目录下所有文件打进产物。这里显式挡掉不该发布的东西 ——
+# 尤其是环境专属的 values(那种文件应该放 charts/ 外面)。
+#
+# ⚠️ 不要写 `!xxx` 否定规则:helm 的 .helmignore **不支持** gitignore 的 `!`,
+# 一旦出现,整个 chart 都会被忽略,helm package 直接报 "Chart.yaml file is missing"
+# (2026-09-02 实测:单独 `values-*.yaml` 正常,加一行 `!values.yaml` 就打不出包)。
+# 这里也不需要否定 —— `values-*.yaml` 要求有个字面的 `-`,匹配不到 values.yaml。
+.git/
+.DS_Store
+*.tmp
+*.bak
+values-*.yaml
+# helm-unittest suites and the guard script's own test, not part of the packaged chart
+tests/
+test-*.py
+__pycache__/

@@ -1,0 +1,296 @@
+# MiniMax H3 视频生成:Router + H3 Server + SGLang(sidecar)。
+# 必填:database.url(或 database.fromSecret)。其余默认值可直接起一套,按集群改存储类、模型路径、调度。
+
+nameOverride: ""
+fullnameOverride: ""
+imagePullSecrets: []
+
+# 素材盘:必须 RWX —— 任务可能 A 副本生成、经 Router 从 B 副本下载。
+# size 是配额不是预占;CephFS 可在线扩,但缩不回去。
+sharedStorage:
+  mountPath: /data/minimax-h3
+  create: true
+  existingClaim: ""
+  accessMode: ReadWriteMany
+  storageClass: ""          # 空 = 集群默认存储类;必须支持 RWX(如 CephFS、NFS)
+  size: 500Gi
+
+database:
+  # 留空则从 PG 的 Secret 自动拼(见 fromSecret,name 为空则不拼);两者都拿不到会 fail。
+  # helm template 不连集群、lookup 取不到,纯渲染时要显式给。
+  url: ""
+  # true:本 chart 在自己 ns 建个只装 DSN 的 Secret(Secret 不能跨 ns 引用)
+  create: true
+  existingSecret: ""
+  existingSecretKey: url
+  fromSecret:
+    namespace: ""
+    name: ""
+    passwordKey: password
+    user: h3
+    database: minimaxh3
+    port: 5432
+
+# 两个能力池:各自的模型、并行度、副本数。任务表按 required_capability 分流,共库不串。
+pools:
+  fl2va:
+    enabled: true
+    replicaCount: 2
+    sglang:
+      model: {hostPath: /data/models/MiniMax-H3/FL2VA}
+      # tp4 对齐 ref2va:把权重(含 24GB adaln_proj)摊到 4 卡,每卡基线从 ~65GB 降到 ~48GB,
+      # 消除 speed 高水位棘轮顶穿 80GB 的 CUDA OOM(生产 fl2va 16/18 失败根因)。
+      # num_gpus = tpSize×ulyssesDegree = 4 不变。原为 {tpSize: 2, ulyssesDegree: 2}。
+      args: {tpSize: 4, ulyssesDegree: 1}
+  ref2va:
+    enabled: true
+    replicaCount: 1
+    # 单个开关同时控制 LoRA 参数、挂载和 Server 采样;关闭即恢复基座请求。
+    turbo:
+      enabled: true
+      lora:
+        hostPath: /data/models/Minimax-h3-Turbo
+        weightName: minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors
+        scale: 1.0
+        alpha: 8
+      sampling:
+        # v0.5.19 的 9 个 sigma 点对应 8 次去噪。
+        numInferenceSteps: 9
+        flowShift: 6.0
+        audioFlowShift: 3.0
+    sglang:
+      model: {hostPath: /data/models/MiniMax-H3/Ref2VA}
+      args: {tpSize: 4, ulyssesDegree: 1}
+      # warmup-mode=request、warmup-steps=2 由模板生成,不依赖 extraArgs。
+      # v0.5.19 支持参考素材与首尾帧混合条件。
+      image: {tag: v0.5.19}
+
+server:
+  # 滚动更新策略(Deployment)。默认先起后退:新副本 Ready 之后才退旧的,
+  # 单副本池在升级时也不会出现产能真空 —— StatefulSet 做不到这点(无 maxSurge)。
+  # 代价:滚动期间临时多占一份 GPU(每副本 tp_size 张)。GPU 紧张就把 maxSurge 设为 0
+  # (可在 pools.<name>.maxSurge 单池覆盖)。
+  rollout:
+    maxSurge: 1
+    maxUnavailable: 0
+    # 多久没进展算滚动失败。Deployment 默认 600s,而 SGLang 的 startupProbe 预算有
+    # 1800s(实测 Ready 要 120~180s,但慢节点/冷页缓存会久得多)——不放宽的话,
+    # 一次偏慢的启动就会让 helm upgrade --wait 失败,尽管 Pod 最终能起来。
+    progressDeadlineSeconds: 1800
+  # 收到 SIGTERM 后先睡这么久再真正开始关(server 容器,不是 sglang 的排空)。
+  # 目的:给 Service 摘除这个 Pod 端点的传播留出窗口 —— server 容器自己没有慢关闭
+  # 逻辑,在途=0 时几乎立即退出,比端点摘除的传播还快,曾实测撞见过一次(900 次里 1 次)
+  # 连接被拒。5s 与 openresty 容器的同名做法(preStop sleep 5)对齐。
+  preStopSleepSeconds: 5
+  enabled: true
+  image:
+    repository: 4pdosc/minimax-h3-server
+    tag: ""            # 留空 = 用 Chart.appVersion,chart 与镜像版本号统一
+    pullPolicy: IfNotPresent
+  service: {port: 8000}
+  # 跨池共享,不部 Router 时用它对外(那种形态只能启用一个池,模板会校验)
+  apiService: {type: ClusterIP, nodePort: "", annotations: {}}
+  externalSglangUrl: ""
+  config:
+    # 租约:单条任务只跑 70~170s,且必须明显小于 sglang.preStop.lingerSeconds
+    leaseSeconds: 300
+    pollSeconds: 2
+    # 任务**总生命周期**上限(排队/运行/重提/下载都算),与上游默认一致。
+    #
+    # 曾经设成 3600(1 小时),理由是"SGLang 串行单并发,卡死却仍回 in_progress 时,
+    # 24h 等于一个 4 卡副本闲置一整天"。现在改回 86400,取舍换了个方向:宁可让极慢/
+    # 卡住的任务多占一会儿,也不要把**还在正常跑的长任务**误杀 —— 被这个上限砍掉的
+    # 任务直接判失败,用户侧看到的是"任务丢了",比副本闲置更难解释。
+    #
+    # ⚠️ 代价要记住:真卡死时不再有 1 小时的兜底,得靠别的信号发现 ——
+    # 看板「最老任务年龄(运行中)」一直涨,或 h3_queue_running_on_instance 长时间不落回 0。
+    queueTimeoutSeconds: 86400
+    # 向 SGLang 提交生成请求的最大次数(含首次),超限判 TooManyAttempts
+    maxAttempts: 5
+    queryRetentionDays: 7
+    assetRetentionDays: 30
+    allowPrivateUrls: false
+    # 数据库不可用时 /readyz 返回 503,把副本从 Service 摘掉
+    readinessChecksDatabase: true
+    # 对外基址,例如 https://h3.example.com 或 https://gw.example.com/minimax-h3。
+    # 空 = 按请求头推导。经 openresty 的 modelRoute 对外时 dispatch 会**剥掉** /<modelRoute.route>/
+    # 前缀,下载 URL 要靠这里把前缀带回来 —— 尾巴与 modelRoute.route 必须一致。
+    publicBaseUrl: ""
+    mediaTimeoutSeconds: 30
+    backendTimeoutSeconds: 30
+    # Worker 领数据库任务前调 SGLang /health 的超时;未就绪时任务留在队列
+    backendReadyTimeoutSeconds: 2
+    # 抓 /metrics/queue 时问后端的超时,必须明显短于 serviceMonitor.scrapeTimeout,
+    # 否则后端假死时 Prometheus 先放弃,连数据库那部分指标也一起丢
+    metricsBackendTimeoutSeconds: 3
+    callbackAttempts: 3
+  extraEnv: []
+  resources:
+    requests: {cpu: "1", memory: 2Gi}
+    limits: {cpu: "4", memory: 8Gi}
+  # sglang.enabled=false 时(纯 CPU 的 server)用这组调度参数
+  schedulerName: ""
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+sglang:
+  enabled: true
+  image:
+    repository: lmsysorg/sglang
+    tag: v0.5.18-cu129
+    pullPolicy: IfNotPresent
+  service: {port: 30010}
+  gpuCount: 4
+  args:
+    modelType: diffusion
+    pipelineClassName: MiniMaxH3Pipeline
+    tpSize: 2
+    ulyssesDegree: 2
+    encoderParallel: auto
+    performanceMode: speed
+    enableTorchCompile: false
+  extraArgs: []
+  outputSubPath: sglang-output
+  model:
+    mountPath: /model
+    hostPath: /data/models/MiniMax-H3/FL2VA
+    existingClaim: ""
+    subPath: ""
+  # /dev/shm,走 emptyDir{medium: Memory},**计入容器内存 limit**
+  shmSize: 64Gi
+  # SGLang 在 diffusion 下的优雅关闭会超时失败(内部超时常量写死),
+  # 所以 preStop 先等空闲再自己发 SIGTERM —— 空闲时 scheduler 秒回。
+  preStop:
+    enabled: true
+    drainDeadlineSeconds: 600
+    lingerSeconds: 360        # 必须 > server.config.leaseSeconds(模板会校验)
+  # 必须盖住 preStop 最坏路径 = drainDeadline + linger(模板会校验)
+  terminationGracePeriodSeconds: 1200
+  probe:
+    enabled: true
+    # 探针探"模型是否驻留 GPU"(exec files/sglang-model-loaded.py),不再只探 HTTP /health ——
+    # diffusion worker 被 CUDA OOM 打死后主进程仍活、/health 假 ok,会变成僵尸后端(实测潜伏 5 天)。
+    path: /health            # 保留(未再被探针使用,留作参考/回退)
+    periodSeconds: 15        # startupProbe 周期(×failureThreshold=1800s 覆盖模型加载)
+    failureThreshold: 120
+    modelLoadedMinMiB: 10240     # 任一 GPU 显存 ≥ 此值即判"模型驻留";死亡态 ~4MiB。tp4 常驻 ~48GB
+    livenessPeriodSeconds: 30    # liveness 周期
+    livenessFailureThreshold: 6  # 连续 6×30s=3min 检测到模型不在才重启(避免瞬态误杀)
+    timeoutSeconds: 5            # exec 探针超时:脚本约 150ms,但重负载时 nvidia-smi 偶发变慢,留余量防误杀
+  # 模型加载峰值实测 ~350-380 GiB(稳态仅 ~19 GiB),256Gi 会 OOMKilled
+  resources:
+    requests: {cpu: "8", memory: 128Gi, ephemeral-storage: 16Gi}
+    limits: {cpu: "32", memory: 512Gi, ephemeral-storage: 16Gi}
+  # 集群里 GPU 负载走 volcano 等调度器时，带卡的 Pod 要用同一个(两个调度器抢同一批 GPU 会账目不一致)
+  schedulerName: ""
+  # 不配 = 优先级 0,资源紧张时会被更高优先级的负载抢占
+  priorityClassName: ""
+  # 限定 GPU 机型(nvidia.com/gpu.product 值)。留空 = 不限。
+  # 实测 A100 比 H100/H800 慢 2.5 倍(768P/4s:170s vs 68s),同池混机型延迟不可预期。
+  gpuProduct: []
+  nodeSelector: {}
+  # GPU 节点的污点
+  tolerations:
+    - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+  affinity: {}
+  podAnnotations: {}
+
+# 无状态,按 capability 转发;双活(k8s 负载均衡,无主备)
+router:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: 4pdosc/minimax-h3-router
+    tag: ""
+    pullPolicy: IfNotPresent
+  connectTimeoutSeconds: 10
+  # k8s 发 SIGTERM 与摘端点并发、有传播延迟,期间该 pod 还会收到新请求。preStop 先
+  # sleep drainSeconds 做 lameduck:进程还在接,等端点摘除传播完(不再进新请求)后才让
+  # SIGTERM 打进来 —— 护住这个窗口内的【短请求】(submit/query/健康检查)。t56 实测:
+  # 删 pod 后该 pod 仍持续 200 满 20s。
+  #   - drainSeconds:固定等待,只需覆盖端点摘除传播(Cilium ~数秒),20s 足够。
+  #   - terminationGracePeriodSeconds:SIGTERM 后到 SIGKILL 的上限。⚠️ 注意:router 是
+  #     httpx 代理流(StreamingResponse ← aiter_raw),uvicorn 在 SIGTERM 时【不会】等这条
+  #     代理流传完(t57 实测:SIGTERM 后 ~2s 长下载即被切),所以抬高这个值对长下载【没用】,
+  #     设 60 够了(只给 uvicorn 正常收尾)。长下载升级时被切,靠客户端 HTTP Range 续传兜底
+  #     (t59 实测:断点续传拼接与完整文件逐字节一致)。要长下载也不断,得改 router 代码
+  #     让代理流优雅排空——当前不做。(server 侧是本地文件流,uvicorn 会等传完,t58 已证不断。)
+  preStop:
+    enabled: true
+    drainSeconds: 20
+  terminationGracePeriodSeconds: 60
+  fl2vaUrls: []
+  ref2vaUrls: []
+  service: {type: ClusterIP, port: 8080, nodePort: "", annotations: {}}
+  extraEnv: []
+  resources:
+    requests: {cpu: 500m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
+  schedulerName: ""
+  # 入口被抢占了后端再健康也没用;集群有高优先级类时建议配上
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# 抓的是 /metrics/queue(排队/运行的即时指标);老的 /metrics 是 24h 窗口统计,不动。
+# labels 必须带 Prometheus 实例的 release 标签,否则对象建了却不被抓。
+serviceMonitor:
+  enabled: true
+  path: /metrics/queue
+  interval: 30s
+  scrapeTimeout: 10s
+  namespace: ""
+  labels:
+    release: kube-prometheus-stack
+  relabelings: []
+  metricRelabelings: []
+
+# autoconfig 的 video 型 ModelRoute,经共享的 openresty 对外。CR 建在本 release 的 ns —— 删 release 时路由跟着走。
+# 需要集群装了 autoconfig(提供 ModelRoute CRD);开启时必须给 openrestyService 和 outputConfigMap。
+modelRoute:
+  enabled: false
+  # API group of the ModelRoute this chart creates; it must be the one the cluster's autoconfig
+  # watches: routing.modelsphere.dev from autoconfig 0.4.0 on. A cluster that has not moved yet
+  # sets routing.gpucluster.io explicitly -- the render refuses the new group on a cluster that
+  # does not serve it.
+  # Moving a cluster: switch this only after the cluster's migration has copied the existing
+  # ModelRoute to the new group. The release then adopts the copy, and the old object it stops
+  # rendering is removed with no old controller left to act on its finalizer. Switching earlier
+  # makes helm delete the old ModelRoute while the old autoconfig still runs, and its finalizer
+  # takes the route out of the shared openresty ConfigMap.
+  apiGroup: routing.modelsphere.dev
+  # 对外路径前缀,与 server.config.publicBaseUrl 的尾巴必须一致
+  route: minimax-h3
+  openrestyService: ""        # 例如 <ns>/openresty
+  outputConfigMap: ""         # 例如 <ns>/openresty-conf
+  values:
+    max_body_size: 64m        # 与 dispatch 的 100m 取更严者
+    proxy_timeout: 3600s
+    connect_timeout: 10s
+    # 下载限速:openresty 是所有模型共享的入口,视频几十 MB,不限速时几个并发就能吃满网卡、波及同机的 LLM。
+    # rate_limit = **总下载带宽**(所有下载连接合计,不是单连接),从第一字节起就限速,
+    # 单位接受 Mbps/Gbps 或纯字节数(不支持 25m/512k 这类 nginx 原生写法)。200Mbps = 25MB/s。
+    # autoconfig 会按下面的 download_conn_limit 把它均分到每连接:
+    # 每连接 limit_rate = rate_limit / download_conn_limit,配合全局 limit_conn,
+    # 使【全局下载带宽 ≤ rate_limit】。
+    rate_limit: 200Mbps
+    # download_conn_limit = **全局(所有客户端合计)** 并发下载连接上限(整数)。超限的下载请求返 429。
+    # 例:rate_limit=200Mbps + download_conn_limit=20 → 每连接 10Mbps、最多 20 个并发下载、全局 ≤ 200Mbps。
+    # 不写此键时 autoconfig 落默认值 10。需要 autoconfig ≥ 0.3.41-rc3 + 已 apply 对应 CRD。
+    # ⚠️ 必须加引号:nginx.values 在 CRD 里是 map[string]string,裸整数会被按 string 校验拒掉。
+    download_conn_limit: "20"
+    # API key 鉴权(Bearer)默认开启,key 不在这里配 —— openresty 镜像里的
+    # lua/api_keys.lua 是唯一来源,与 LLM 路由同一张表(密钥不进 git)。
+    # 关掉鉴权配 auth: "false"。
+    #
+    # auth_public_paths = 免鉴权路径的正则,三态:
+    #   不写(默认)   下载路径放行 ^/v2/video_generation/[^/]+/content$
+    #   写成 ""      免鉴权名单为空 → 连下载也要 key
+    #   写成别的正则  **替代**默认那条(不是追加)
+    # 默认放行下载的理由:content.url 是交给最终用户的,浏览器/播放器不会带
+    # Authorization 头,而任务 id 是 UUID,这个 URL 本身相当于一次性凭证。

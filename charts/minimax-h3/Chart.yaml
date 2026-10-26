@@ -1,0 +1,10 @@
+apiVersion: v2
+name: minimax-h3
+description: Self-hosted MiniMax H3-compatible video generation for the open-weight MiniMax H3 models -- H3 Router, H3 Server and SGLang in one release, with separate FL2VA and Ref2VA pools
+home: https://github.com/modelsphere/minimax-h3-server
+sources:
+  - https://github.com/modelsphere/minimax-h3-server
+  - https://github.com/modelsphere/helm-charts
+type: application
+version: 0.2.0
+appVersion: "0.1.21"

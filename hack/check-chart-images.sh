@@ -40,6 +40,7 @@ extra_values() {
     bodylog-exporter) echo "--set data.hostPath=/ci --set nodeSelector.ci=ci" ;;
     bodylog-victorialogs) echo "--set bodylog.hostPath=/ci" ;;
     continuation-gateway) echo "--set config.continuationModel=ci" ;;
+    minimax-h3)           echo "--set database.url=postgresql://ci:ci@ci:5432/ci" ;;
     swiss)                echo "--set rbac.namespaces[0]=ci" ;;
     llm-autotune)         echo "--set jwtSecret=ci" ;;
     llm-bench)            echo "--set secrets.secretKey=ci --set secrets.platformSecretKey=ci --set secrets.adminEmail=ci@example.com --set secrets.adminUsername=ci --set secrets.adminPassword=ci --set postgres.password=ci" ;;

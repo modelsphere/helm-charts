@@ -1,0 +1,164 @@
+# The LoRA arguments, warmup, sampling env and the /lora mount are rendered by the chart.
+# A second copy through extraArgs / extraEnv / extraVolumes, or the old server.config
+# keys, fails the render instead of producing an engine with two answers. Both Turbo
+# states are covered: base mode still owns warmup and must still refuse the keys.
+suite: ref2va settings the chart owns cannot be set twice
+release:
+  name: ci
+templates:
+- templates/server-deployment.yaml
+set:
+  database.url: postgresql://unused
+tests:
+- it: refuses server.config.ref2vaNumInferenceSteps=9 (turbo off)
+  set:
+    server.config.ref2vaNumInferenceSteps: 9
+    pools.ref2va.turbo.enabled: false
+  asserts:
+  - failedTemplate:
+      errorPattern: Legacy server\.config
+- it: refuses server.config.ref2vaNumInferenceSteps=9 (turbo on)
+  set:
+    server.config.ref2vaNumInferenceSteps: 9
+    pools.ref2va.turbo.enabled: true
+  asserts:
+  - failedTemplate:
+      errorPattern: Legacy server\.config
+- it: refuses server.config.ref2vaFlowShift=6 (turbo off)
+  set:
+    server.config.ref2vaFlowShift: 6
+    pools.ref2va.turbo.enabled: false
+  asserts:
+  - failedTemplate:
+      errorPattern: Legacy server\.config
+- it: refuses server.config.ref2vaFlowShift=6 (turbo on)
+  set:
+    server.config.ref2vaFlowShift: 6
+    pools.ref2va.turbo.enabled: true
+  asserts:
+  - failedTemplate:
+      errorPattern: Legacy server\.config
+- it: refuses server.config.ref2vaAudioFlowShift=3 (turbo off)
+  set:
+    server.config.ref2vaAudioFlowShift: 3
+    pools.ref2va.turbo.enabled: false
+  asserts:
+  - failedTemplate:
+      errorPattern: Legacy server\.config
+- it: refuses server.config.ref2vaAudioFlowShift=3 (turbo on)
+  set:
+    server.config.ref2vaAudioFlowShift: 3
+    pools.ref2va.turbo.enabled: true
+  asserts:
+  - failedTemplate:
+      errorPattern: Legacy server\.config
+- it: 'refuses server.extraEnv=[{"name": "H3_REF2VA_FLOW_SHIFT", "value": "6"}] (turbo off)'
+  set:
+    server.extraEnv: &id001
+    - name: H3_REF2VA_FLOW_SHIFT
+      value: '6'
+    pools.ref2va.turbo.enabled: false
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: 'refuses server.extraEnv=[{"name": "H3_REF2VA_FLOW_SHIFT", "value": "6"}] (turbo on)'
+  set:
+    server.extraEnv: *id001
+    pools.ref2va.turbo.enabled: true
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: refuses sglang.extraArgs=["--lora-scale=1"] (turbo off)
+  set:
+    sglang.extraArgs: &id002
+    - --lora-scale=1
+    pools.ref2va.turbo.enabled: false
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: refuses sglang.extraArgs=["--lora-scale=1"] (turbo on)
+  set:
+    sglang.extraArgs: *id002
+    pools.ref2va.turbo.enabled: true
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: refuses sglang.extraArgs=["--lora-path", "/lora"] (turbo off)
+  set:
+    sglang.extraArgs: &id003
+    - --lora-path
+    - /lora
+    pools.ref2va.turbo.enabled: false
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: refuses sglang.extraArgs=["--lora-path", "/lora"] (turbo on)
+  set:
+    sglang.extraArgs: *id003
+    pools.ref2va.turbo.enabled: true
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: refuses sglang.extraArgs=["--warmup-steps=1"] (turbo off)
+  set:
+    sglang.extraArgs: &id004
+    - --warmup-steps=1
+    pools.ref2va.turbo.enabled: false
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: refuses sglang.extraArgs=["--warmup-steps=1"] (turbo on)
+  set:
+    sglang.extraArgs: *id004
+    pools.ref2va.turbo.enabled: true
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: refuses sglang.extraArgs=["--warmup-mode", "request"] (turbo off)
+  set:
+    sglang.extraArgs: &id005
+    - --warmup-mode
+    - request
+    pools.ref2va.turbo.enabled: false
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: refuses sglang.extraArgs=["--warmup-mode", "request"] (turbo on)
+  set:
+    sglang.extraArgs: *id005
+    pools.ref2va.turbo.enabled: true
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: 'refuses sglang.extraVolumeMounts=[{"name": "other", "mountPath": "/lora/"}] (turbo off)'
+  set:
+    sglang.extraVolumeMounts: &id006
+    - name: other
+      mountPath: /lora/
+    pools.ref2va.turbo.enabled: false
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: 'refuses sglang.extraVolumeMounts=[{"name": "other", "mountPath": "/lora/"}] (turbo on)'
+  set:
+    sglang.extraVolumeMounts: *id006
+    pools.ref2va.turbo.enabled: true
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: 'refuses sglang.extraVolumes=[{"name": "ref2va-lora", "emptyDir": {}}] (turbo off)'
+  set:
+    sglang.extraVolumes: &id007
+    - name: ref2va-lora
+      emptyDir: {}
+    pools.ref2va.turbo.enabled: false
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by
+- it: 'refuses sglang.extraVolumes=[{"name": "ref2va-lora", "emptyDir": {}}] (turbo on)'
+  set:
+    sglang.extraVolumes: *id007
+    pools.ref2va.turbo.enabled: true
+  asserts:
+  - failedTemplate:
+      errorPattern: managed by

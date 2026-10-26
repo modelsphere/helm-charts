@@ -1,0 +1,18 @@
+MiniMax H3 已安装到 namespace {{ .Release.Namespace }}。
+
+{{- if .Values.router.enabled }}
+Router:  {{ include "minimax-h3.router.fullname" . }}:{{ .Values.router.service.port }}
+fl2va:   {{ include "minimax-h3.poolUrls" (dict "root" . "pool" "fl2va") }}
+ref2va:  {{ include "minimax-h3.poolUrls" (dict "root" . "pool" "ref2va") | default "(未启用)" }}
+{{- else }}
+入口:    {{ include "minimax-h3.server.fullname" . }}-api:{{ .Values.server.service.port }}(未部署 Router)
+{{- end }}
+启用的能力池:{{ include "minimax-h3.enabledPools" . }}(每个 Server Pod 内含一个 SGLang 容器)
+
+集群内自测:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ if .Values.router.enabled }}{{ include "minimax-h3.router.fullname" . }} 8080:{{ .Values.router.service.port }}{{ else }}{{ include "minimax-h3.server.fullname" . }}-api 8080:{{ .Values.server.service.port }}{{ end }}
+  curl localhost:8080/healthz
+  curl -X POST localhost:8080/v2/video_generation -H 'Content-Type: application/json' \
+    -d '{"model":"MiniMax-H3","content":[{"type":"text","text":"一只水獭在河边缓慢行走"}],"resolution":"768P","duration":6,"ratio":"16:9"}'
+
+Dashboard: http://<router>:{{ .Values.router.service.port }}/dashboard

@@ -1,0 +1,496 @@
+{{- include "minimax-h3.validate" . -}}
+{{- if .Values.server.enabled }}
+{{- $root := . }}
+# 跨池共享的普通 Service:查询/删除/下载/Dashboard 走哪个 Server 都一样
+# (任务状态在库里、文件在共享盘),所以两个池的 Pod 都选进来。
+# router.enabled=false 时用它对外。
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "minimax-h3.server.fullname" . }}-api
+  labels:
+    {{- include "minimax-h3.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  {{- with .Values.server.apiService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.server.apiService.type }}
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: {{ .Values.server.service.port }}
+      targetPort: http
+      {{- if and (eq .Values.server.apiService.type "NodePort") .Values.server.apiService.nodePort }}
+      nodePort: {{ .Values.server.apiService.nodePort }}
+      {{- end }}
+{{- range $poolName, $pool := .Values.pools }}
+{{- if $pool.enabled }}
+{{- $name := include "minimax-h3.pool.fullname" (dict "root" $root "pool" $poolName) }}
+{{- $sglang := fromYaml (include "minimax-h3.poolSglang" (dict "root" $root "pool" $poolName)) }}
+{{- $turbo := default (dict) $pool.turbo }}
+{{- $turboEnabled := and (eq $poolName "ref2va") $turbo.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "minimax-h3.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: server
+    minimax-h3/pool: {{ $poolName }}
+    minimax-h3/scrape: "true"
+spec:
+  # headless:给 Prometheus 按 Pod 抓指标用(minimax-h3/scrape),以及需要时按 Pod 直连排查。
+  # Router **不用它** —— 它打的是下面那个 ClusterIP <pool>-svc,由 kube-proxy 负载均衡
+  # (早先注释写的"按 Pod 名点名"在代码里从未实现,换 Deployment 后 Pod 名也不再可预测)。
+  clusterIP: None
+  selector:
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: server
+    minimax-h3/pool: {{ $poolName }}
+  ports:
+    - name: http
+      port: {{ $root.Values.server.service.port }}
+      targetPort: http
+    {{- if $sglang.enabled }}
+    - name: sglang
+      port: {{ $sglang.service.port }}
+      targetPort: sglang
+    {{- end }}
+---
+# 池内负载均衡:Router 指这个 ClusterIP,由 k8s 只把流量发给 Ready 的 Pod,
+# 扩缩容不用改 Router 的 env(headless 那个只用于按 Pod 抓指标 / 直连排查;
+# 换成 Deployment 后不再有 governing Service 和可预测的 Pod DNS 这回事)。
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-svc
+  labels:
+    {{- include "minimax-h3.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: server
+    minimax-h3/pool: {{ $poolName }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: server
+    minimax-h3/pool: {{ $poolName }}
+  ports:
+    - name: http
+      port: {{ $root.Values.server.service.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "minimax-h3.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: server
+    minimax-h3/pool: {{ $poolName }}
+spec:
+  replicas: {{ $pool.replicaCount }}
+  {{/*
+    用 Deployment 而不是 StatefulSet:
+      * StatefulSet **没有 maxSurge**,同一个 Pod 名先删后建 —— 单副本池在滚动更新时
+        产能完全归零,而且新 Pod 还要几分钟加载 SGLang 模型。Deployment 可以先起后退。
+      * StatefulSet 复用 Pod 名,而 H3_INSTANCE_ID 取的就是 Pod 名 —— 库里"挂着我名字的
+        running 任务"可能是同名旧 Pod 留下的僵尸。Deployment 的名字带随机后缀不复用,
+        这个僵尸场景直接不存在。
+    确认过没有任何有状态依赖:无 volumeClaimTemplates(用共享 RWX PVC + hostPath 模型盘)、
+    Router 打的是普通 ClusterIP Service(不是 per-pod DNS)、server 访问自己的 SGLang 用
+    $(POD_IP)、TP 全在单 Pod 内无跨 Pod 通信;instance_id 只是 DB 里的逻辑标签,要的是
+    全局唯一而非可预测。
+  */}}
+  {{- /* Deployment 特有:滚动多久没进展就标 ProgressDeadlineExceeded(默认才 600s)。
+         StatefulSet 没有这个概念,是迁到 Deployment 引入的新行为。SGLang 的 startupProbe
+         预算是 failureThreshold×periodSeconds = 1800s(给慢节点/冷页缓存留的),实测 Ready
+         要 120~180s;若某次启动超过 600s,Deployment 会判定"没进展"、helm upgrade --wait
+         随之失败,而其实 Pod 最终能起来。所以这里对齐到 startupProbe 的预算。 */}}
+  progressDeadlineSeconds: {{ $root.Values.server.rollout.progressDeadlineSeconds }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      {{- /* 先起后退:滚动期间产能不塌。代价是临时多占一份 GPU(每副本 tp_size 张卡),
+             GPU 紧张的环境把 maxSurge 配成 0 —— 那就退回"先退后起"的老行为。
+             不能用 `default`:Helm 把 0 当空值,池级配 maxSurge: 0 会被静默忽略、退回
+             全局值 —— 恰恰是 GPU 紧张时最想配的那个。用 hasKey 判断"配没配过"。 */}}
+      maxSurge: {{ if hasKey $pool "maxSurge" }}{{ $pool.maxSurge }}{{ else }}{{ $root.Values.server.rollout.maxSurge }}{{ end }}
+      maxUnavailable: {{ if hasKey $pool "maxUnavailable" }}{{ $pool.maxUnavailable }}{{ else }}{{ $root.Values.server.rollout.maxUnavailable }}{{ end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: server
+      minimax-h3/pool: {{ $poolName }}
+  template:
+    metadata:
+      labels:
+        {{- include "minimax-h3.labels" $root | nindent 8 }}
+        app.kubernetes.io/component: server
+        minimax-h3/pool: {{ $poolName }}
+      {{- with $root.Values.server.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ if $sglang.enabled }}{{ $sglang.terminationGracePeriodSeconds }}{{ else }}60{{ end }}
+      {{- if eq $poolName "ref2va" }}
+      # Also required in base mode: older images implicitly send Turbo sampling.
+      initContainers:
+        - name: ref2va-config-check
+          image: "{{ $root.Values.server.image.repository }}:{{ $root.Values.server.image.tag | default $root.Chart.AppVersion }}"
+          imagePullPolicy: {{ $root.Values.server.image.pullPolicy }}
+          command:
+            - python
+            - -c
+            - {{ $root.Files.Get "files/ref2va-config-check.py" | quote }}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: "1", memory: 128Mi}
+      {{- end }}
+      containers:
+        - name: server
+          image: "{{ $root.Values.server.image.repository }}:{{ $root.Values.server.image.tag | default $root.Chart.AppVersion }}"
+          imagePullPolicy: {{ $root.Values.server.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $root.Values.server.service.port }}
+          env:
+            {{- if $sglang.enabled }}
+            # 同 Pod 的 SGLang。**别写 127.0.0.1**:提交后 backend_url 会落库,
+            # 租约过期由别的 Pod 接管时要拿它回访原作业(worker.py 用
+            # `task.backend_url or settings.sglang_url`),localhost 会让接管方
+            # 去问自己那台 SGLang,job id 不存在 -> 任务被误判失败。
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: H3_SGLANG_URL
+              value: "http://$(POD_IP):{{ $sglang.service.port }}"
+            {{- else }}
+            - name: H3_SGLANG_URL
+              value: {{ $root.Values.server.externalSglangUrl | quote }}
+            {{- end }}
+            # 能力由池决定:fl2va 的 Server 只领 T2V/I2V 任务,ref2va 只领参考类任务
+            - name: H3_SERVICE_CAPABILITY
+              value: {{ $poolName | quote }}
+            - name: H3_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "minimax-h3.dbSecretName" $root }}
+                  key: {{ include "minimax-h3.dbSecretKey" $root }}
+            - name: H3_STORAGE_ROOT
+              value: {{ $root.Values.sharedStorage.mountPath | quote }}
+            # SGLang 看到的是同一个 PVC、同一个路径
+            - name: H3_SGLANG_MEDIA_ROOT
+              value: {{ $root.Values.sharedStorage.mountPath | quote }}
+            - name: H3_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: H3_HOST
+              value: "0.0.0.0"
+            - name: H3_PORT
+              value: {{ $root.Values.server.service.port | quote }}
+            - name: H3_TASK_LEASE_SECONDS
+              value: {{ $root.Values.server.config.leaseSeconds | quote }}
+            - name: H3_BACKEND_POLL_SECONDS
+              value: {{ $root.Values.server.config.pollSeconds | quote }}
+            - name: H3_QUEUE_TIMEOUT_SECONDS
+              value: {{ $root.Values.server.config.queueTimeoutSeconds | quote }}
+            - name: H3_MAX_ATTEMPTS
+              value: {{ $root.Values.server.config.maxAttempts | quote }}
+            - name: H3_QUERY_RETENTION_DAYS
+              value: {{ $root.Values.server.config.queryRetentionDays | quote }}
+            - name: H3_ASSET_RETENTION_DAYS
+              value: {{ $root.Values.server.config.assetRetentionDays | quote }}
+            {{- with $root.Values.server.config.publicBaseUrl }}
+            - name: H3_PUBLIC_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: H3_READINESS_CHECKS_DATABASE
+              value: {{ $root.Values.server.config.readinessChecksDatabase | quote }}
+            - name: H3_ALLOW_PRIVATE_URLS
+              value: {{ $root.Values.server.config.allowPrivateUrls | quote }}
+            - name: H3_MEDIA_TIMEOUT_SECONDS
+              value: {{ $root.Values.server.config.mediaTimeoutSeconds | quote }}
+            # 收到 SIGTERM 后最多花多久等手上那条任务跑完(优雅关闭,见 server.py 的 lifespan)。
+            # 与 sglang 的 preStop 排空上限取同一个值:两者是同一件事的两半 ——
+            # sglang 等作业跑完才自杀,server 等同一条作业的记账做完才退出。
+            - name: H3_SHUTDOWN_DRAIN_SECONDS
+              value: {{ $sglang.preStop.drainDeadlineSeconds | quote }}
+            - name: H3_METRICS_BACKEND_TIMEOUT_SECONDS
+              value: {{ $root.Values.server.config.metricsBackendTimeoutSeconds | quote }}
+            - name: H3_BACKEND_TIMEOUT_SECONDS
+              value: {{ $root.Values.server.config.backendTimeoutSeconds | quote }}
+            - name: H3_BACKEND_READY_TIMEOUT_SECONDS
+              value: {{ $root.Values.server.config.backendReadyTimeoutSeconds | quote }}
+            - name: H3_CALLBACK_ATTEMPTS
+              value: {{ $root.Values.server.config.callbackAttempts | quote }}
+            - name: H3_START_WORKERS
+              value: "true"
+            {{- if $turboEnabled }}
+            - name: H3_REF2VA_NUM_INFERENCE_STEPS
+              value: {{ $turbo.sampling.numInferenceSteps | quote }}
+            - name: H3_REF2VA_FLOW_SHIFT
+              value: {{ $turbo.sampling.flowShift | quote }}
+            - name: H3_REF2VA_AUDIO_FLOW_SHIFT
+              value: {{ $turbo.sampling.audioFlowShift | quote }}
+            {{- end }}
+            {{- with $root.Values.server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: assets
+              mountPath: {{ $root.Values.sharedStorage.mountPath }}
+          {{- /* server 容器本身没有 preStop,SIGTERM 打过去后(在途=0 时)几乎立即关监听
+                 端口退出;而 Service 摘除这个 Pod 的端点是【另一条独立链路】(这里是
+                 Cilium eBPF:agent watch Endpoints API → 更新本机后端表),有自己的
+                 传播延迟。两者没有同步,实测过一次 900 次探活里 1 次连接被拒 ——
+                 概率虽低(~0.1%)但确实存在,机制和 openresty 容器加 preStop sleep 5
+                 是同一个理由(这个仓库自己就有先例)。加个短 sleep,让进程在端点摘除
+                 传播完成前继续接受连接,不影响正常关闭耗时(在途任务的排空逻辑不受
+                 影响,这只是延后"开始关闭"的时刻)。 */}}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep {{ $root.Values.server.preStopSleepSeconds | default 5 }}"]
+          # startupProbe 只确认"进程起来了",打 /healthz 而不是 /readyz ——
+          # /readyz 会反映数据库健康(见 !2),部署时数据库还没就绪的话,
+          # 打 /readyz 会让 Pod 在启动窗口内被判失败并反复重启。
+          # 依赖是否可用交给 readinessProbe 表达。
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            {{- toYaml $root.Values.server.resources | nindent 12 }}
+        {{- if $sglang.enabled }}
+        # SGLang 与 Server 同 Pod:一对一由结构保证,不需要按序号配对。
+        # 代价:改 Server 会重建整个 Pod,SGLang 要重新加载模型(约 5 分钟)。
+        - name: sglang
+          image: "{{ $sglang.image.repository }}:{{ $sglang.image.tag }}"
+          imagePullPolicy: {{ $sglang.image.pullPolicy }}
+          command: ["sglang", "serve"]
+          args:
+            - --model-type
+            - {{ $sglang.args.modelType | quote }}
+            - --model-path
+            - {{ $sglang.model.mountPath | quote }}
+            - --model-subfolder
+            - "."
+            - --pipeline-class-name
+            - {{ $sglang.args.pipelineClassName | quote }}
+            - --trust-remote-code
+            - "true"
+            - --num-gpus
+            - {{ $sglang.gpuCount | quote }}
+            - --tp-size
+            - {{ $sglang.args.tpSize | quote }}
+            - --ulysses-degree
+            - {{ $sglang.args.ulyssesDegree | quote }}
+            - --encoder-parallel
+            - {{ $sglang.args.encoderParallel | quote }}
+            - --performance-mode
+            - {{ $sglang.args.performanceMode | quote }}
+            - --enable-torch-compile
+            - {{ $sglang.args.enableTorchCompile | quote }}
+            - --output-path
+            - {{ printf "%s/%s" (trimSuffix "/" $root.Values.sharedStorage.mountPath) $sglang.outputSubPath | quote }}
+            - --host
+            - "0.0.0.0"
+            - --port
+            - {{ $sglang.service.port | quote }}
+            {{- if eq $poolName "ref2va" }}
+            # H3 warmup requires both interval endpoints, even in base mode.
+            - --warmup-mode
+            - request
+            - --warmup-steps
+            - "2"
+            {{- end }}
+            {{- if $turboEnabled }}
+            - --lora-path
+            - /lora
+            - --lora-weight-name
+            - {{ $turbo.lora.weightName | quote }}
+            - --lora-nickname
+            - h3-ref2va-turbo
+            - --lora-scale
+            - {{ $turbo.lora.scale | quote }}
+            - --lora-alpha
+            - {{ $turbo.lora.alpha | quote }}
+            - --lora-merge-mode
+            - auto
+            {{- end }}
+            {{- with $sglang.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: sglang
+              containerPort: {{ $sglang.service.port }}
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            - name: PYTORCH_CUDA_ALLOC_CONF
+              value: expandable_segments:True
+            - name: SGLANG_PORT
+              value: {{ $sglang.service.port | quote }}
+            - name: PRESTOP_DRAIN_DEADLINE
+              value: {{ $sglang.preStop.drainDeadlineSeconds | quote }}
+            - name: PRESTOP_LINGER
+              value: {{ $sglang.preStop.lingerSeconds | quote }}
+            - name: MODEL_LOADED_MIN_MIB      # 探针判"模型驻留 GPU"的阈值(见 files/sglang-model-loaded.py)
+              value: {{ $sglang.probe.modelLoadedMinMiB | default 10240 | quote }}
+            {{- with $sglang.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: model
+              mountPath: {{ $sglang.model.mountPath }}
+              readOnly: true
+              {{- with $sglang.model.subPath }}
+              subPath: {{ . }}
+              {{- end }}
+            - name: assets
+              mountPath: {{ $root.Values.sharedStorage.mountPath }}
+            - name: dshm
+              mountPath: /dev/shm
+            {{- if $turboEnabled }}
+            - name: ref2va-lora
+              mountPath: /lora
+              readOnly: true
+            {{- end }}
+            {{- with $sglang.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if $sglang.preStop.enabled }}
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - python3
+                  - -c
+                  - |
+                    {{- $root.Files.Get "files/sglang-prestop.py" | nindent 20 }}
+          {{- end }}
+          {{- if $sglang.probe.enabled }}
+          {{- /* 探针探"模型是否驻留 GPU",不是只探 HTTP /health —— diffusion worker 被
+                 CUDA OOM 打死后主进程仍活、/health 假返回 ok(僵尸后端,实测潜伏 5 天)。
+                 用 GPU 显存表达模型存活;脚本 nvidia-smi 失败时 fail-safe 返回 0,不误重启。
+                 startupProbe 保留原 1800s 预算覆盖模型加载,之后 liveness 捕获死亡、重启。 */}}
+          startupProbe:
+            exec:
+              command: ["python3", "-c", {{ $root.Files.Get "files/sglang-model-loaded.py" | quote }}]
+            periodSeconds: {{ $sglang.probe.periodSeconds }}
+            failureThreshold: {{ $sglang.probe.failureThreshold }}
+            timeoutSeconds: {{ $sglang.probe.timeoutSeconds | default 5 }}
+          readinessProbe:
+            exec:
+              command: ["python3", "-c", {{ $root.Files.Get "files/sglang-model-loaded.py" | quote }}]
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: {{ $sglang.probe.timeoutSeconds | default 5 }}
+          livenessProbe:
+            exec:
+              command: ["python3", "-c", {{ $root.Files.Get "files/sglang-model-loaded.py" | quote }}]
+            periodSeconds: {{ $sglang.probe.livenessPeriodSeconds | default 30 }}
+            failureThreshold: {{ $sglang.probe.livenessFailureThreshold | default 6 }}
+            timeoutSeconds: {{ $sglang.probe.timeoutSeconds | default 5 }}
+          {{- end }}
+          resources:
+            {{- $res := deepCopy $sglang.resources }}
+            {{- $_ := set (default (dict) $res.limits) "nvidia.com/gpu" $sglang.gpuCount }}
+            {{- $_ := set (default (dict) $res.requests) "nvidia.com/gpu" $sglang.gpuCount }}
+            {{- toYaml $res | nindent 12 }}
+        {{- end }}
+      volumes:
+        - name: assets
+          persistentVolumeClaim:
+            claimName: {{ include "minimax-h3.sharedClaim" $root }}
+        {{- if $sglang.enabled }}
+        - name: model
+          {{- if $sglang.model.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ $sglang.model.existingClaim }}
+            readOnly: true
+          {{- else }}
+          hostPath:
+            path: {{ required "sglang.model.hostPath 或 existingClaim 必填" $sglang.model.hostPath }}
+            type: Directory
+          {{- end }}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ $sglang.shmSize }}
+        {{- if $turboEnabled }}
+        - name: ref2va-lora
+          hostPath:
+            path: {{ $turbo.lora.hostPath | quote }}
+            type: Directory
+        {{- end }}
+        {{- with $sglang.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- end }}
+      {{- /* 带 SGLang 时 Pod 落在 GPU 节点上,调度参数用 sglang 那组 */}}
+      {{- $sched := ternary $sglang $root.Values.server $sglang.enabled }}
+      {{- with $sched.schedulerName }}
+      schedulerName: {{ . }}
+      {{- end }}
+      {{- with $sched.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with $sched.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $sched.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $sched.affinity }}
+      affinity:
+        {{- toYaml $sched.affinity | nindent 8 }}
+      {{- else if and $sglang.enabled $sglang.gpuProduct }}
+      {{- /* 没写 affinity 但限定了 GPU 机型:按 nvidia.com/gpu.product 标签硬亲和。
+             两种机型的差距是真实的 —— 同样 768P/4s,A100 执行 170s、H800 68s(2.5×),
+             同一个池混机型会让延迟不可预期。 */}}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: nvidia.com/gpu.product
+                    operator: In
+                    values:
+                      {{- toYaml $sglang.gpuProduct | nindent 22 }}
+      {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
