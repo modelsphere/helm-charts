@@ -7,4 +7,4 @@ sources:
   - https://github.com/modelsphere/helm-charts
 type: application
 version: 0.2.0
-appVersion: "0.1.21"
+appVersion: "0.2.0"
