@@ -27,9 +27,10 @@ fullnameOverride: ""
 master:
   replicas: 2
   command: [mooncake_master]
-  # Separates this deployment's election keys from any other Mooncake cluster sharing
-  # the same etcd.
-  clusterId: mooncake
+  # Election key namespace in etcd. Keep the default unless every client can be told
+  # otherwise: Mooncake store clients look the leader up under "mooncake_cluster" and
+  # have no option to change it, so a master with any other id is never found.
+  clusterId: mooncake_cluster
   ports:
     rpc: 50051
     httpMetadata: 8080
@@ -48,10 +49,13 @@ master:
   # publishes to clients is the pod IP, which on hostNetwork is the node IP.
   hostNetwork: true
 
-  # Some Mooncake builds link libcuda even for the master. On clusters that inject
-  # the driver through a RuntimeClass (e.g. CDI), name it here and set
-  # NVIDIA_VISIBLE_DEVICES=all in env -- this injects the driver without requesting
-  # a GPU.
+  # Some Mooncake builds link libcuda even for the master (and the NoF registrar
+  # imports store.so). Name the NVIDIA RuntimeClass here and set
+  # NVIDIA_VISIBLE_DEVICES=none in env: the driver libraries are injected, no GPU is.
+  # "none" works with the toolkit's legacy mode only; a CDI-mode class rejects it
+  # ("unresolvable CDI devices ...gpu=none"), so use the legacy class if both exist.
+  # With privileged: true the pod sees every /dev/nvidia* node anyway; the master
+  # creates no CUDA context and uses no GPU memory.
   runtimeClassName: ""
 
   # NVMe-oF via SPDK needs a privileged container, the RDMA devices and hugepages.
