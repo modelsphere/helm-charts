@@ -119,9 +119,9 @@ workloads.
 |---|---|---|
 | `image.repository` / `image.tag` | `lmsysorg/sglang` / `v0.5.21` | any image with an etcd-enabled `mooncake_master` |
 | `master.replicas` | `2` | must be at least 2 |
-| `master.clusterId` | `mooncake` | separates election keys when masters of several clusters share one etcd |
+| `master.clusterId` | `mooncake_cluster` | election key namespace; clients only look under the default, so change it only if your clients can be configured to match |
 | `master.hostNetwork` | `true` | gives the master a stable, node-routable address, and lets it reach storage networks |
-| `master.runtimeClassName` | `""` | set this on CDI clusters when the Mooncake build links `libcuda`, and add `NVIDIA_VISIBLE_DEVICES=all` to `master.env`; this injects the driver without requesting a GPU |
+| `master.runtimeClassName` | `""` | the NVIDIA RuntimeClass, when the Mooncake build links `libcuda`; add `NVIDIA_VISIBLE_DEVICES=none` to `master.env` to inject the driver without a GPU (legacy-mode class; CDI mode rejects `none`) |
 | `master.terminationGracePeriodSeconds` | `10` | see failover time above |
 | `ha.connstring` | `""` | external etcd endpoints; empty means the bundled etcd |
 | `etcd.enabled` | `true` | three-member etcd, one member per node |
