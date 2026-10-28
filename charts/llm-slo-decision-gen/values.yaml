@@ -4,6 +4,14 @@
 # `helm upgrade --install -n <ns>`. Workloads use {{ .Release.Namespace }}.
 # Service DNS is http://decision-gen.<Release.Namespace>.svc:80 (and siblings).
 
+# Scheduling for every pod of this release (decision-gen, its unstable twin and slo-api): they are
+# small CPU-only services that land wherever the cluster lets them. Set tolerations when all nodes
+# are tainted -- an NPU cluster can carry huawei.com/npu:NoSchedule on every node, and then nothing
+# here schedules without one.
+tolerations: []
+nodeSelector: {}
+affinity: {}
+
 # ---------------------------------------------------------------------------
 # decision-gen: emits per-service replica decisions on :8080/decisions.
 # The "unstable" variant (when enabled) is a second Deployment/Service so a
@@ -82,7 +90,7 @@ sloApi:
   replicas: 1
   image:
     repository: 4pdosc/llm-slo-api
-    tag: "0.2.0"
+    tag: "0.2.1"
     pullPolicy: IfNotPresent
   service:
     port: 80

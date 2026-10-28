@@ -24,6 +24,18 @@ spec:
         app: slo-api
     spec:
       serviceAccountName: slo-api
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: slo-api
           image: "{{ .Values.sloApi.image.repository }}:{{ .Values.sloApi.image.tag }}"

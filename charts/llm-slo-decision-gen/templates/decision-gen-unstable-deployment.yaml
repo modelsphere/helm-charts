@@ -24,6 +24,18 @@ spec:
         app: decision-gen-unstable
     spec:
       serviceAccountName: decision-gen
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: decision-gen
           # Same image as stable; unstable differs only by env (LOG_LEVEL=DEBUG).
