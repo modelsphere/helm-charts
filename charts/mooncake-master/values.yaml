@@ -129,7 +129,11 @@ nofRegistrar:
   #    traddr: 192.0.2.10
   #    port: 4420
   #    size: 2199023255552
-  interval: 30
+  # Seconds between checks. After a failover the new leader rejects every put with
+  # "insufficient space" until the volumes are registered again, so this is added
+  # directly to the outage. Measured with a live client: 30 -> about 31s of failed
+  # puts (8s election + 23s waiting), 5 -> about 11s. A check is one metrics read.
+  interval: 5
   # Decide leader/standby as usual but only log what would be registered.
   dryRun: false
   resources:
