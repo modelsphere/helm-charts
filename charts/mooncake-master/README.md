@@ -96,6 +96,24 @@ nofRegistrar:
     - {nqn: nqn.2004-12.com.example:array1-vol0, traddr: 192.0.2.10, port: 4420, size: 2199023255552}
 ```
 
+**Objects do not survive a failover.** The key-to-offset map lives in the
+leader's memory, and nothing on the volumes can rebuild it: unlike store
+processes that offload to their own disks, an NVMe-oF volume has no owner that
+re-registers its keys. Measured with a client writing once a second: every
+object written before the failover read back as a miss afterwards, while new
+writes worked again about 11 s after the leader was deleted (with the default
+`nofRegistrar.interval: 5`). For a KV cache this means a cold cache after each
+failover, not wrong data.
+
+**Do not add `--enable_oplog` with NVMe-oF volumes.** It replicates the
+key-to-offset map to the standby, but not the volumes' allocation state, and the
+registrar re-registers every volume as empty. The new leader then hands out
+offsets that still hold live objects. Measured: each new write after the failover
+overwrote one old object, and 28 of 104 old objects read back at full size with
+wrong bytes, reported as successful reads. For a KV cache that is silent
+corruption. Snapshots (`--enable_snapshot`) do not cover NVMe-oF segments either.
+Upstream tracks this as kvcache-ai/Mooncake#3826.
+
 `nofRegistrar.dryRun=true` keeps the leader/standby decision but only logs what
 would be registered. Use it to check a deployment against volumes another master
 still owns.
