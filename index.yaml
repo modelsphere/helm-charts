@@ -2,6 +2,26 @@ apiVersion: v1
 entries:
   autoconfig:
   - apiVersion: v2
+    appVersion: 0.4.2
+    created: "2026-10-28T08:18:53.000450785Z"
+    description: k8s 后端发现 → 自动同步 openresty peers / cache-aware-router workers(ModelRoute
+      controller)
+    digest: deac5eac6374ebfc5289745b2a21a9671a41a7ce59f2fe7562bf4c52d8aa6f69
+    home: https://github.com/modelsphere/autoconfig
+    keywords:
+    - routing
+    - openresty
+    - cache-aware-router
+    - service-discovery
+    - operator
+    name: autoconfig
+    sources:
+    - https://github.com/modelsphere/autoconfig
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/autoconfig-0.4.2/autoconfig-0.4.2.tgz
+    version: 0.4.2
+  - apiVersion: v2
     appVersion: 0.4.1
     created: "2026-10-12T11:02:39.26212069Z"
     description: k8s 后端发现 → 自动同步 openresty peers / cache-aware-router workers(ModelRoute
@@ -63,6 +83,25 @@ entries:
     version: 0.3.47
   bodylog:
   - apiVersion: v2
+    appVersion: 0.1.15
+    created: "2026-10-28T08:18:53.345463193Z"
+    description: 'Body-log listener for the OpenResty router: receives full request/response
+      frames over TCP, writes them as hourly JSONL, and serves rollups over HTTP'
+    digest: 3eba1876fd9d183d06d6bb593a5aa149dd79cfa2a22eabf1fce16ef4d05475c6
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - openresty
+    - observability
+    name: bodylog
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/bodylog-0.1.16/bodylog-0.1.16.tgz
+    version: 0.1.16
+  - apiVersion: v2
     appVersion: 0.1.14
     created: "2026-10-13T08:25:01.841803084Z"
     description: 'Body-log listener for the OpenResty router: receives full request/response
@@ -120,6 +159,26 @@ entries:
     - https://github.com/modelsphere/helm-charts/releases/download/bodylog-0.1.13/bodylog-0.1.13.tgz
     version: 0.1.13
   bodylog-exporter:
+  - apiVersion: v2
+    appVersion: 0.2.12
+    created: "2026-10-28T08:18:53.660260765Z"
+    description: Turns the body-log listener's detail records into Prometheus metrics,
+      and polls the router's control-plane endpoints for live routing state
+    digest: c24dbc74e3568433afa18bca59928a64e4c8a42c876ef5857a1d7ede7bb3fc96
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - exporter
+    - prometheus
+    - observability
+    name: bodylog-exporter
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/bodylog-exporter-0.3.5/bodylog-exporter-0.3.5.tgz
+    version: 0.3.5
   - apiVersion: v2
     appVersion: 0.2.11
     created: "2026-10-21T03:04:22.148786225Z"
@@ -824,6 +883,27 @@ entries:
     - https://github.com/modelsphere/helm-charts/releases/download/minimax-h3-0.2.0/minimax-h3-0.2.0.tgz
     version: 0.2.0
   openresty:
+  - apiVersion: v2
+    appVersion: 0.1.27
+    created: "2026-10-28T08:18:53.993094748Z"
+    description: 'Session-affinity router for LLM inference backends: pins a conversation
+      to the backend that already holds its prefix cache, with active health checking,
+      adaptive concurrency and full body logging'
+    digest: 0be3f83eaa0afbb80558cff6be6726cc6a5653a0368fe693cd8b657e6f8ed73f
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - openresty
+    - routing
+    - session-affinity
+    - autoconfig
+    name: openresty
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/openresty-0.1.27/openresty-0.1.27.tgz
+    version: 0.1.27
   - apiVersion: v2
     appVersion: 0.1.20
     created: "2026-10-06T02:14:10.470396107Z"
@@ -1867,6 +1947,19 @@ entries:
     version: 0.7.0
   swiss:
   - apiVersion: v2
+    appVersion: 0.7.2
+    created: "2026-10-28T08:18:54.276799261Z"
+    description: 'swissd -- the Swiss deploy control plane for the sglang and vllm
+      charts. One instance per cluster, running inside the cluster it manages: it
+      reads the model catalog over HTTP, reads this cluster''s releases and nodes
+      through its own ServiceAccount, and serves the web UI embedded in its binary.'
+    digest: 9f2d79ea35617c2ce27095d8d3d75f2488d22db0636de1444550b15b9349bfc1
+    name: swiss
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/swiss-0.7.2/swiss-0.7.2.tgz
+    version: 0.7.2
+  - apiVersion: v2
     appVersion: 0.7.0
     created: "2026-10-23T08:24:15.721397194Z"
     description: 'swissd -- the Swiss deploy control plane for the sglang and vllm
@@ -2636,4 +2729,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-10-26T08:09:49.899779222Z"
+generated: "2026-10-28T08:18:54.277034421Z"
