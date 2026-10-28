@@ -40,6 +40,8 @@ master:
   # Serve the transfer-engine metadata over HTTP from the master (instead of a
   # separate metadata service).
   httpMetadataServer: true
+  # Do not add --enable_oplog when NVMe-oF volumes are registered: it silently
+  # corrupts objects after a failover (see README, "NVMe-oF volumes").
   extraArgs: []
   #  - --eviction_high_watermark_ratio=0.95
   env: []
