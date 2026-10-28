@@ -2,6 +2,26 @@ apiVersion: v1
 entries:
   autoconfig:
   - apiVersion: v2
+    appVersion: 0.4.3
+    created: "2026-10-28T09:41:29.188721643Z"
+    description: k8s 后端发现 → 自动同步 openresty peers / cache-aware-router workers(ModelRoute
+      controller)
+    digest: 97ad5e26d1ce25e050f918c163081b9415abca9974f7186e968d3e77f0071dd0
+    home: https://github.com/modelsphere/autoconfig
+    keywords:
+    - routing
+    - openresty
+    - cache-aware-router
+    - service-discovery
+    - operator
+    name: autoconfig
+    sources:
+    - https://github.com/modelsphere/autoconfig
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/autoconfig-0.4.3/autoconfig-0.4.3.tgz
+    version: 0.4.3
+  - apiVersion: v2
     appVersion: 0.4.2
     created: "2026-10-28T08:18:53.000450785Z"
     description: k8s 后端发现 → 自动同步 openresty peers / cache-aware-router workers(ModelRoute
@@ -883,6 +903,27 @@ entries:
     - https://github.com/modelsphere/helm-charts/releases/download/minimax-h3-0.2.0/minimax-h3-0.2.0.tgz
     version: 0.2.0
   openresty:
+  - apiVersion: v2
+    appVersion: 0.1.28
+    created: "2026-10-28T09:41:29.425175792Z"
+    description: 'Session-affinity router for LLM inference backends: pins a conversation
+      to the backend that already holds its prefix cache, with active health checking,
+      adaptive concurrency and full body logging'
+    digest: 0a80cd14e3d73c71aaa058a36463977d5ab4e8316b29104558f2fa8c016d9d8c
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - openresty
+    - routing
+    - session-affinity
+    - autoconfig
+    name: openresty
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/openresty-0.1.28/openresty-0.1.28.tgz
+    version: 0.1.28
   - apiVersion: v2
     appVersion: 0.1.27
     created: "2026-10-28T08:18:53.993094748Z"
@@ -2729,4 +2770,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-10-28T08:18:54.277034421Z"
+generated: "2026-10-28T09:41:29.425524161Z"
