@@ -9,13 +9,13 @@ type: application
 # The chart version tracks appVersion for this chart, so the chart and the image
 # it ships share one number. Not a rule for every chart here: cart carries a
 # chart version of its own, independent of the app it ships.
-version: 0.1.15
+version: 0.1.16
 # The listener image tag: values.image.tag is empty by default and falls back to
 # this, so a release moves both together.
 #
-# 0.1.13 is the actual release line -- it is the newest bodylog/v* tag upstream,
-# the version ChartMuseum serves, and the image the clusters run. "1.0.0" was a
-# placeholder that an internal pipeline rewrote from the tag at publish time, so
-# it named a release that never existed.
-appVersion: "0.1.14"
+# 0.1.15 is the first release published for linux/arm64 as well as amd64
+# (4pdosc/bodylog-listener:0.1.15, a bodylog/v0.1.15 tag upstream). The chart is
+# 0.1.16, one ahead of it, because chart 0.1.15 was already published with the
+# 0.1.14 image and a published chart version cannot be reused.
+appVersion: "0.1.15"
 keywords: [bodylog, openresty, observability]

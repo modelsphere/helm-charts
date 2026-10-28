@@ -9,13 +9,12 @@ type: application
 # The chart version tracks appVersion for this chart, so the chart and the image
 # it ships share one number. Not a rule for every chart here: cart carries a
 # chart version of its own, independent of the app it ships.
-version: 0.1.21
+version: 0.1.27
 # The router image tag: values.image.tag is empty by default and falls back to
 # this, so a release moves both together.
 #
-# 0.1.20 is the current release: it is the newest openresty/v* tag upstream, the
-# version ChartMuseum serves, and the image published as
-# 4pdosc/llm-openresty:0.1.20. This said 0.1.19 because that was the newest
-# release when the chart was written, before 0.1.20 was cut.
-appVersion: "0.1.20"
+# 0.1.27 is the first release published for linux/arm64 as well as amd64
+# (4pdosc/llm-openresty:0.1.27, an openresty/v0.1.27 tag upstream); earlier
+# images are amd64 only.
+appVersion: "0.1.27"
 keywords: [openresty, routing, session-affinity, autoconfig]
