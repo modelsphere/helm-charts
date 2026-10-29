@@ -265,6 +265,120 @@
       }
     },
 
+    "storageKVOffload": {
+      "description": "sglang Hierarchical cache tiered to a storage backend (L3). Mutually exclusive with localKVOffload -- this block SUBSUMES it: setting storageKVOffload.enabled=true renders --enable-hierarchical-cache and the hicache argv from hicache:, so localKVOffload.enabled must stay false. hicache: knobs are spelled the same as in localKVOffload.hicache (verbatim --hicache-<key>=<value> pass-through, engine-side validation only). mooncake: env knobs are rendered ONLY when set -- unset ones defer to existing chart behavior (e.g. pd runtime exports MOONCAKE_IB_DEVICE from NCCL_IB_HCA). use_hugepage drives three surfaces at once: MC_STORE_* env, a hugepages-<size> k8s resource limit, and a /dev/hugepages hostPath volume+mount. Decode pods in pd mode receive none of this section.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "backend": {
+          "description": "Only hicache today; kept as a named key for parity with localKVOffload and for future backend growth.",
+          "type": "string",
+          "enum": ["hicache"]
+        },
+        "storage_backend": {
+          "description": "The L3 backend the engine spills to (mooncake today). Rendered verbatim as --hicache-storage-backend=<value>. Required non-empty when enabled=true -- the point of the section is the storage tier, so an enabled block with no storage tier is a configuration error.",
+          "type": ["string", "null"],
+          "enum": ["mooncake", "file", "sim", "npu_memcache", "hf3fs", "nixl", "aibrix", "dynamic", "eic", "simm", "mori", "shm", "tensorcast", "seaweedfs", null]
+        },
+        "hicache": {
+          "description": "Same shape and semantics as localKVOffload.hicache. storage-backend / storage-prefetch-policy / etc. are passed through verbatim as --hicache-<key>=<value>.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "host-memory-mode": {
+              "type": ["string", "null"],
+              "enum": ["cache", "buffer_only", null]
+            },
+            "ratio": {
+              "type": ["number", "null"]
+            },
+            "size": {
+              "type": ["integer", "null"],
+              "minimum": 1
+            },
+            "host-memory-fraction": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1
+            },
+            "write-policy": {
+              "type": ["string", "null"],
+              "enum": ["write_back", "write_through", "write_through_selective", null]
+            },
+            "io-backend": {
+              "type": ["string", "null"],
+              "enum": ["direct", "kernel", "kernel_ascend", null]
+            },
+            "mem-layout": {
+              "type": ["string", "null"],
+              "enum": ["layer_first", "page_first", "page_first_direct", "page_first_kv_split", "page_head", null]
+            },
+            "storage-prefetch-policy": {
+              "type": ["string", "null"],
+              "enum": ["best_effort", "wait_complete", "timeout", null]
+            },
+            "storage-backend-extra-config": {
+              "description": "JSON dict or @file path, pass-through.",
+              "type": ["string", "null"]
+            },
+            "storage-prefetch-retry-poll-interval": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "storage-prefetch-retry-max-attempts": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            }
+          }
+        },
+        "mooncake": {
+          "description": "MOONCAKE_* env knobs passed to the engine. Each is rendered ONLY when explicitly set -- unset defers to the chart's other behavior (notably the pd runtime export of MOONCAKE_IB_DEVICE from NCCL_IB_HCA, which an unset device preserves).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "master": {
+              "description": "Renders MOONCAKE_MASTER verbatim (e.g. etcd://host1:port;host2:port).",
+              "type": ["string", "null"]
+            },
+            "te_meta_data_server": {
+              "description": "Renders MOONCAKE_TE_META_DATA_SERVER (e.g. P2PHANDSHAKE).",
+              "type": ["string", "null"]
+            },
+            "protocol": {
+              "description": "Renders MOONCAKE_PROTOCOL (e.g. rdma, tcp).",
+              "type": ["string", "null"]
+            },
+            "device": {
+              "description": "Renders MOONCAKE_DEVICE. When unset on pd mode, the chart's existing runtime export of MOONCAKE_IB_DEVICE from NCCL_IB_HCA remains the source; when set, this value wins.",
+              "type": ["string", "null"]
+            },
+            "global_segment_size": {
+              "description": "Renders MOONCAKE_GLOBAL_SEGMENT_SIZE (e.g. 1gb).",
+              "type": ["string", "null"]
+            },
+            "use_hugepage": {
+              "description": "Drives three surfaces together: MC_STORE_USE_HUGEPAGE / MC_STORE_HUGEPAGE_SIZE env, a hugepages-<size> resource limit on the engine container, and a /dev/hugepages hostPath volume+mount.",
+              "type": "boolean"
+            },
+            "hugepage": {
+              "description": "Children of use_hugepage. page_size converts to the k8s resource suffix via a small known-set table (2MB/2Mi/2048KB/... -> 2Mi; 1GB/1Gi/1048576KB/... -> 1Gi; anything else fails at render and the user sets resources.limits by hand). resource_limit is the k8s limit on hugepages-<size>.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "page_size": {
+                  "type": ["string", "null"]
+                },
+                "resource_limit": {
+                  "type": ["string", "null"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
     "image": {
       "type": "object",
       "additionalProperties": false,

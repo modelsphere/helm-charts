@@ -214,6 +214,24 @@
        (--disaggregation-decode-enable-offload-kvcache) and is out of scope
        here. */}}
 {{- $isPdDecode := and $pdRole (not (hasPrefix "prefill-" $role)) }}
+{{- /* storageKVOffload subsumes localKVOffload. It renders --enable-hierarchical-cache
+       itself plus the hicache: argv under storageKVOffload.hicache, so the two
+       blocks must not both be on -- a copy-paste error would otherwise double
+       the flags. Reject early at the identity layer so whichever template path
+       (deployment / lws / pd-ds / pd-colocate) is the one that tries first gets
+       the same clear message. */}}
+{{- if and ($root.Values.localKVOffload.enabled | default false) ($root.Values.storageKVOffload.enabled | default false) }}
+{{- fail "sglang: localKVOffload.enabled and storageKVOffload.enabled are both true. storageKVOffload subsumes localKVOffload (it renders --enable-hierarchical-cache itself), so set localKVOffload.enabled: false and move its hicache: knobs under storageKVOffload.hicache" }}
+{{- end }}
+{{- /* storageKVOffload.enabled=true with no storage_backend is "the section is
+       on but the storage tier is unnamed" -- a storage-offload section that
+       doesn't spill anywhere. The values doc points here. */}}
+{{- if and ($root.Values.storageKVOffload.enabled | default false) (not ($root.Values.storageKVOffload.storage_backend | default "")) }}
+{{- fail "sglang: storageKVOffload.enabled=true requires storageKVOffload.storage_backend to be set (e.g. mooncake). For RAM-tier-only hicache, use localKVOffload instead" }}
+{{- end }}
+{{- if and ($root.Values.pd.enabled | default false) ($root.Values.pd.colocate | default false) ($root.Values.storageKVOffload.enabled | default false) }}
+{{- fail "sglang: pd.colocate + storageKVOffload together is currently not supported" }}
+{{- end }}
 {{- $l2 := and $root.Values.localKVOffload.enabled (eq ($root.Values.localKVOffload.backend | default "") "hicache") (not $isPdDecode) }}
 {{- if $l2 }}
 {{- $flags = append $flags "--enable-hierarchical-cache" }}
@@ -225,6 +243,68 @@
 {{- if not (kindIs "invalid" $val) }}
 {{- $flags = append $flags (printf "--hicache-%s=%v" $key $val) }}
 {{- end }}
+{{- end }}
+{{- end }}
+{{- /* storageKVOffload.backend=hicache: same argv contract as localKVOffload
+       above (--enable-hierarchical-cache + verbatim --hicache-<key>=<value>
+       under hicache:), PLUS the storage-backend argv and the mooncake env --
+       which is emitted into $e.mooncakeEnv / $e.mooncakeHugepage here so
+       sglang.engineContainers and sglang.podSpec can pick them up at their
+       own emission points without re-reading .Values. Decode pods get
+       nothing -- same $isPdDecode rule as localKVOffload. */ -}}
+{{- $l3 := and $root.Values.storageKVOffload.enabled (eq ($root.Values.storageKVOffload.backend | default "") "hicache") (not $isPdDecode) }}
+{{- $mooncakeEnv := list }}
+{{- $mooncakeHugepage := dict }}
+{{- if $l3 }}
+{{- $flags = append $flags "--enable-hierarchical-cache" }}
+{{- $flags = append $flags (printf "--hicache-storage-backend=%s" $root.Values.storageKVOffload.storage_backend) }}
+{{- range $key, $val := $root.Values.storageKVOffload.hicache }}
+{{- if not (kindIs "invalid" $val) }}
+{{- $flags = append $flags (printf "--hicache-%s=%v" $key $val) }}
+{{- end }}
+{{- end }}
+{{- /* MOONCAKE_* env: only the keys the user explicitly sets. Unset ones are
+       NOT defaulted -- pd already exports MOONCAKE_IB_DEVICE from NCCL_IB_HCA
+       at runtime, and any other default would lock the user in. Map iterates
+       in stable key order so the env list is diff-stable across renders. */}}
+{{- $mc := $root.Values.storageKVOffload.mooncake | default dict }}
+{{- range $pair := list
+      (list "master" "MOONCAKE_MASTER")
+      (list "te_meta_data_server" "MOONCAKE_TE_META_DATA_SERVER")
+      (list "protocol" "MOONCAKE_PROTOCOL")
+      (list "device" "MOONCAKE_DEVICE")
+      (list "global_segment_size" "MOONCAKE_GLOBAL_SEGMENT_SIZE") }}
+{{- $k := index $pair 0 }}
+{{- $envName := index $pair 1 }}
+{{- $v := index $mc $k }}
+{{- if and (not (kindIs "invalid" $v)) (ne (toString $v) "") }}
+{{- $mooncakeEnv = append $mooncakeEnv (dict "name" $envName "value" (toString $v)) }}
+{{- end }}
+{{- end }}
+{{- /* use_hugepage: the env pair, the k8s resource limit, and the volume/mount
+       coordinates ride together in $mooncakeHugepage. The page-size -> k8s
+       suffix map is a small known-set whitelist; anything outside fails so
+       the user sets resources.limits by hand rather than getting a silently
+       wrong hugepages-<X> key. */}}
+{{- if $mc.use_hugepage }}
+{{- $hp := $mc.hugepage | default dict }}
+{{- $pageSize := $hp.page_size | default "" }}
+{{- $pageLimit := $hp.resource_limit | default "" }}
+{{- if or (eq (toString $pageSize) "") (eq (toString $pageLimit) "") }}
+{{- fail "sglang: storageKVOffload.mooncake.use_hugepage=true requires hugepage.page_size and hugepage.resource_limit to both be set" }}
+{{- end }}
+{{- $k8sSuffix := "" }}
+{{- range $entry := list
+      (list "2MB" "2Mi") (list "2Mi" "2Mi") (list "2048KB" "2Mi") (list "2048KiB" "2Mi") (list "2097152" "2Mi")
+      (list "1GB" "1Gi") (list "1Gi" "1Gi") (list "1048576KB" "1Gi") (list "1048576KiB" "1Gi") (list "1073741824" "1Gi") }}
+{{- if eq (toString $pageSize) (index $entry 0) }}
+{{- $k8sSuffix = index $entry 1 }}
+{{- end }}
+{{- end }}
+{{- if eq $k8sSuffix "" }}
+{{- fail (printf "sglang: storageKVOffload.mooncake.hugepage.page_size=%q is not in the chart's known-set (2MB, 2Mi, 1GB, 1Gi). Set resources.limits[\"hugepages-<size>\"] by hand, or open a chart PR to extend the map" (toString $pageSize)) }}
+{{- end }}
+{{- $mooncakeHugepage = dict "pageSize" (toString $pageSize) "k8sSuffix" $k8sSuffix "limit" (toString $pageLimit) }}
 {{- end }}
 {{- end }}
 {{- /* toString, so a YAML-typed entry (`- 8` under `- --tp`) reaches the pod as
@@ -258,7 +338,9 @@
       "cacheEnabled" $cacheEnabled
       "cacheSuffix" $cacheSuffix
       "cacheBaseHostPath" $cacheBaseHostPath
-      "cacheFullHostPath" $cacheFullHostPath) -}}
+      "cacheFullHostPath" $cacheFullHostPath
+      "mooncakeEnv" $mooncakeEnv
+      "mooncakeHugepage" $mooncakeHugepage) -}}
 {{- end -}}
 
 {{/*
@@ -289,6 +371,8 @@
 {{- $expand := $e.expand }}
 {{- $flags := $e.flags }}
 {{- $preStop := $root.Values.lifecycle.preStop }}
+{{- $mooncakeEnv := $e.mooncakeEnv | default list }}
+{{- $mooncakeHugepage := $e.mooncakeHugepage | default dict }}
 {{- /* Host-level compile-cache management (see cache in values.yaml): when
        enabled, the engine command is wrapped in cache_manager.py, which leases
        a per-node slot and symlinks ~/.cache/sglang at it. Disabled under
@@ -388,6 +472,18 @@
         (dict "name" "SGLANG_CACHE_MAX_SLOTS" "value" (printf "%v" ($cache.maxSlotsPerNode | default 8)))
         (dict "name" "SGLANG_CACHE_HISTORY_LIMIT" "value" (printf "%v" ($cache.historyLimit | default 2)))) }}
   {{- end }}
+  {{- /* storageKVOffload mooncake env (if any) is appended AFTER the chart's
+       own entries so a user collision still wins via mergeEnv's last-wins. */}}
+  {{- if $mooncakeEnv }}
+  {{- $chartEnv = concat $chartEnv $mooncakeEnv }}
+  {{- end }}
+  {{- /* MC_STORE_USE_HUGEPAGE / MC_STORE_HUGEPAGE_SIZE ride together with the
+       hugepage volume+resource: only emitted when use_hugepage is true. */}}
+  {{- if $mooncakeHugepage }}
+  {{- $chartEnv = concat $chartEnv (list
+        (dict "name" "MC_STORE_USE_HUGEPAGE" "value" "1")
+        (dict "name" "MC_STORE_HUGEPAGE_SIZE" "value" $mooncakeHugepage.pageSize)) }}
+  {{- end }}
   env:
   {{- include "sglang.mergeEnv" (dict "chart" $chartEnv "user" $root.Values.env "padding" 4) }}
   {{- if $serves }}
@@ -411,7 +507,14 @@
   securityContext:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- if or $hasModel $cacheEnabled $root.Values.volumeMounts $shmOn }}
+  {{- /* /dev/hugepages: same step-aside-if-user-mounted rule as /dev/shm, so a
+         values file that mounts it through volumeMounts keeps ownership. */}}
+  {{- $userHugepage := false }}
+  {{- range $root.Values.volumeMounts }}
+  {{- if eq (.mountPath | default "") "/dev/hugepages" }}{{ $userHugepage = true }}{{ end }}
+  {{- end }}
+  {{- $hugepageOn := and $mooncakeHugepage (not $userHugepage) }}
+  {{- if or $hasModel $cacheEnabled $root.Values.volumeMounts $shmOn $hugepageOn }}
   volumeMounts:
   {{- if $hasModel }}
   - name: model-storage
@@ -426,6 +529,10 @@
   - name: cache-manager-script
     mountPath: /opt/sglang-cache
     readOnly: true
+  {{- end }}
+  {{- if $hugepageOn }}
+  - name: hugepage
+    mountPath: /dev/hugepages
   {{- end }}
   {{- if $shmOn }}
   - name: dshm
@@ -473,6 +580,15 @@
   {{- if and $root.Values.rdma.enabled (or $multi $pdRole) }}
   {{- if kindIs "invalid" (index (index $res "limits" | default dict) "rdma/hca_shared") }}
   {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "rdma/hca_shared" "1")) }}
+  {{- end }}
+  {{- end }}
+  {{- /* storageKVOffload hugepage limit: user-set value for the same key wins,
+         matching the rdma/hca_shared rule above -- a values override is the
+         supported way to express page sizes outside the known-set map. */}}
+  {{- if $mooncakeHugepage }}
+  {{- $hpKey := printf "hugepages-%s" $mooncakeHugepage.k8sSuffix }}
+  {{- if kindIs "invalid" (index (index $res "limits" | default dict) $hpKey) }}
+  {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict $hpKey $mooncakeHugepage.limit)) }}
   {{- end }}
   {{- end }}
   {{- with $res }}
@@ -624,6 +740,25 @@
 
 {{- define "sglang.podSpec" -}}
 {{- $root := .root }}
+{{- /* Colocate always renders the merged Deployment (pd-colocate.yaml); podSpec
+       is the one-engine pod, so it is always the non-colocate identity. */}}
+{{- $e := fromYaml (include "sglang.engineIdentity" (dict "root" $root "role" .role "roleCfg" (.roleCfg | default dict) "colocate" false)) }}
+{{- $role := $e.role }}
+{{- $roleCfg := $e.roleCfg }}
+{{- $lws := $root.Values.lws }}
+{{- $multi := $e.multi }}
+{{- $pdRole := $e.pdRole }}
+{{- $worker := $e.worker }}
+{{- $serves := $e.serves }}
+{{- $oc := $e.oc }}
+{{- $pname := $e.pname }}
+{{- $hwPort := $e.hwPort }}
+{{- $httpPort := $e.httpPort }}
+{{- $hasModel := $e.hasModel }}
+{{- $override := $e.override }}
+{{- $cacheEnabled := $e.cacheEnabled }}
+{{- $cacheFullHostPath := $e.cacheFullHostPath }}
+{{- $mooncakeHugepage := $e.mooncakeHugepage | default dict }}
 {{- /* /dev/shm: the chart mounts one unless the values already do. A user who
        mounts /dev/shm through volumeMounts keeps ownership of it -- emitting
        the chart's as well would put two mounts on the same path and the pod
@@ -644,24 +779,21 @@
 {{- end }}
 {{- end }}
 {{- end }}
-{{- /* Colocate always renders the merged Deployment (pd-colocate.yaml); podSpec
-       is the one-engine pod, so it is always the non-colocate identity. */}}
-{{- $e := fromYaml (include "sglang.engineIdentity" (dict "root" $root "role" .role "roleCfg" (.roleCfg | default dict) "colocate" false)) }}
-{{- $role := $e.role }}
-{{- $roleCfg := $e.roleCfg }}
-{{- $lws := $root.Values.lws }}
-{{- $multi := $e.multi }}
-{{- $pdRole := $e.pdRole }}
-{{- $worker := $e.worker }}
-{{- $serves := $e.serves }}
-{{- $oc := $e.oc }}
-{{- $pname := $e.pname }}
-{{- $hwPort := $e.hwPort }}
-{{- $httpPort := $e.httpPort }}
-{{- $hasModel := $e.hasModel }}
-{{- $override := $e.override }}
-{{- $cacheEnabled := $e.cacheEnabled }}
-{{- $cacheFullHostPath := $e.cacheFullHostPath }}
+{{- /* Same guard for the hugepage volume storageKVOffload adds. The user-free
+       mount check happens at volumeMounts-render time in engineContainers;
+       here we only reject a same-named user volume. */}}
+{{- $userHugepage := false }}
+{{- range $root.Values.volumeMounts }}
+{{- if eq (.mountPath | default "") "/dev/hugepages" }}{{ $userHugepage = true }}{{ end }}
+{{- end }}
+{{- $hugepageOn := and $mooncakeHugepage (not $userHugepage) }}
+{{- if $hugepageOn }}
+{{- range $root.Values.volumes }}
+{{- if eq (.name | default "") "hugepage" }}
+{{- fail "volumes has an entry named \"hugepage\", which is the name this chart gives the /dev/hugepages volume it adds under storageKVOffload.mooncake.use_hugepage. Rename that entry, or set use_hugepage: false and manage the volume yourself." }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- $preStop := $root.Values.lifecycle.preStop }}
 {{- /* Shutdown budget: preStop + SGLang's post-SIGTERM drain, checked by
        sglang.shutdownBudget. Workers get their own, because they drain nothing
@@ -754,13 +886,23 @@ initContainers:
 containers:
 {{- include "sglang.engineContainers" (dict "root" $root "role" .role "roleCfg" (.roleCfg | default dict) "colocate" false) }}
 {{- $hangVol := and $root.Values.hangWatcher.enabled $serves }}
-{{- if or $hasModel $hangVol $cacheEnabled $root.Values.volumes $shmOn }}
+{{- if or $hasModel $hangVol $cacheEnabled $root.Values.volumes $shmOn $mooncakeHugepage }}
 volumes:
 {{- if $shmOn }}
 - name: dshm
   emptyDir:
     medium: Memory
     sizeLimit: {{ $root.Values.shm.sizeLimit }}
+{{- end }}
+{{- if and $mooncakeHugepage (not $userHugepage) }}
+# /dev/hugepages for mooncake-store's MC_STORE_USE_HUGEPAGE path. No type: --
+# mounting an unpopulated host dir is fine (mooncake then fails its own
+# clean error), while DirectoryOrCreate against a node whose kernel has not
+# mounted hugetlbfs there yet would either fail the schedule or, worse,
+# create a tmpfs-backed empty dir the engine happily writes into.
+- name: hugepage
+  hostPath:
+    path: /dev/hugepages
 {{- end }}
 {{- if $hasModel }}
 - name: model-storage
