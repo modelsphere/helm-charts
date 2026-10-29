@@ -115,6 +115,12 @@
 {{- if and (not $override) (not $hasModel) }}
 {{- fail "vllm: model.localPath is empty while the chart is still building vLLM's command line, and vLLM cannot start without --model. Set commandOverride to run a non-vLLM image, or point model.localPath at the weights" }}
 {{- end }}
+{{- /* storageKVOffload is a stub on the vllm chart: kept as a namespace for
+       parity with sglang, no rendering behind it yet. Fail loud rather than
+       silently drop a setting that does meaningful work elsewhere. */}}
+{{- if $root.Values.storageKVOffload.enabled | default false }}
+{{- fail "vllm: storageKVOffload is not implemented on this chart (kept as a stub for sglang-chart parity). Use localKVOffload instead, or drop the section" }}
+{{- end }}
 {{- /*
   The engine command line, built once so both command forms say the same thing.
   Skipped entirely under commandOverride.

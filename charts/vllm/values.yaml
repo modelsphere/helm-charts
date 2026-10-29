@@ -439,6 +439,13 @@ localKVOffload:
         repository: ""
         tag: ""
 
+# Stub: not implemented on the vllm chart. Setting enabled=true fails at
+# render with a clear "not implemented" error. Reserved namespace so a
+# deployment that previously used sglang's storageKVOffload gets an explicit
+# answer rather than a silent no-op when ported over.
+storageKVOffload:
+  enabled: false
+
 image:
   repository: "vllm/vllm-openai"
   tag: "latest-cu129-ubuntu2404"

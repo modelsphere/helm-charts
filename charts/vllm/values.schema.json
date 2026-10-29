@@ -292,6 +292,15 @@
       }
     },
 
+    "storageKVOffload": {
+      "description": "Stub: not implemented on the vllm chart. Setting enabled=true fails at render. Reserved namespace for parity with the sglang chart while the L3 story for vllm is designed.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+
     "image": {
       "type": "object",
       "additionalProperties": false,
