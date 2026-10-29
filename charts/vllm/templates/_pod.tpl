@@ -546,6 +546,17 @@
   {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "rdma/hca_shared" "1")) }}
   {{- end }}
   {{- end }}
+  {{- /* K8s requires cpu+memory requests alongside any hugepages-* limit
+         (the API server rejects the pod otherwise). Set the floor at cpu: 1 /
+         memory: 4Gi so a hugepages-* user add-on never hits the admission
+         error with no obvious cause. User-set values for either key win. */}}
+  {{- $reqs := index $res "requests" | default dict }}
+  {{- if kindIs "invalid" (index $reqs "cpu") }}
+  {{- $res = mergeOverwrite (deepCopy $res) (dict "requests" (dict "cpu" "1")) }}
+  {{- end }}
+  {{- if kindIs "invalid" (index $reqs "memory") }}
+  {{- $res = mergeOverwrite (deepCopy $res) (dict "requests" (dict "memory" "4Gi")) }}
+  {{- end }}
   {{- with $res }}
   resources:
     {{- toYaml . | nindent 4 }}
