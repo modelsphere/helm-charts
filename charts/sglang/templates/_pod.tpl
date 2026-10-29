@@ -263,9 +263,7 @@
 {{- $flags = append $flags (printf "--hicache-%s=%v" $key $val) }}
 {{- end }}
 {{- end }}
-{{- /* MOONCAKE_* env: only the keys the user explicitly sets. Unset ones are
-       NOT defaulted -- pd already exports MOONCAKE_IB_DEVICE from NCCL_IB_HCA
-       at runtime, and any other default would lock the user in. Map iterates
+{{- /* MOONCAKE_* env: only the keys the user explicitly sets. Map iterates
        in stable key order so the env list is diff-stable across renders. */}}
 {{- $mc := $root.Values.storageKVOffload.mooncake | default dict }}
 {{- range $pair := list
@@ -591,17 +589,22 @@
   {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict $hpKey $mooncakeHugepage.limit)) }}
   {{- end }}
   {{- end }}
-  {{- /* K8s requires cpu+memory requests alongside any hugepages-* limit
-         (the API server rejects the pod otherwise). Default them at the
-         engine pod's floor; a user-set value for either one wins, so nothing
-         here locks the deployment in. Only set when missing entirely -- the
-         merge semantics are the same as the hugepage limit above. */}}
+  {{- /* K8s rejects a pod with a hugepages-* limit unless cpu and memory both
+         appear in either requests or limits. Default them at a floor when
+         absent everywhere, so a user's hugepages-only resource block does not
+         trip admission. A user-set value in requests or limits counts as
+         "user has it" for that key. Scoped to pods that actually carry a
+         hugepages-* limit -- applying it unconditionally changes QoS class on
+         every engine pod, which is not what this is for. */}}
+  {{- if $mooncakeHugepage }}
   {{- $reqs := index $res "requests" | default dict }}
-  {{- if kindIs "invalid" (index $reqs "cpu") }}
+  {{- $lims := index $res "limits" | default dict }}
+  {{- if and (kindIs "invalid" (index $reqs "cpu")) (kindIs "invalid" (index $lims "cpu")) }}
   {{- $res = mergeOverwrite (deepCopy $res) (dict "requests" (dict "cpu" "1")) }}
   {{- end }}
-  {{- if kindIs "invalid" (index $reqs "memory") }}
+  {{- if and (kindIs "invalid" (index $reqs "memory")) (kindIs "invalid" (index $lims "memory")) }}
   {{- $res = mergeOverwrite (deepCopy $res) (dict "requests" (dict "memory" "4Gi")) }}
+  {{- end }}
   {{- end }}
   {{- with $res }}
   resources:
@@ -898,7 +901,7 @@ initContainers:
 containers:
 {{- include "sglang.engineContainers" (dict "root" $root "role" .role "roleCfg" (.roleCfg | default dict) "colocate" false) }}
 {{- $hangVol := and $root.Values.hangWatcher.enabled $serves }}
-{{- if or $hasModel $hangVol $cacheEnabled $root.Values.volumes $shmOn $mooncakeHugepage }}
+{{- if or $hasModel $hangVol $cacheEnabled $root.Values.volumes $shmOn $hugepageOn }}
 volumes:
 {{- if $shmOn }}
 - name: dshm
@@ -906,15 +909,15 @@ volumes:
     medium: Memory
     sizeLimit: {{ $root.Values.shm.sizeLimit }}
 {{- end }}
-{{- if and $mooncakeHugepage (not $userHugepage) }}
-# /dev/hugepages for mooncake-store's MC_STORE_USE_HUGEPAGE path. No type: --
-# mounting an unpopulated host dir is fine (mooncake then fails its own
-# clean error), while DirectoryOrCreate against a node whose kernel has not
-# mounted hugetlbfs there yet would either fail the schedule or, worse,
-# create a tmpfs-backed empty dir the engine happily writes into.
+{{- if $hugepageOn }}
+# /dev/hugepages for mooncake-store's MC_STORE_USE_HUGEPAGE path. emptyDir on
+# hugetlbfs, not a hostPath: per-pod, accounted against the pod's hugepages
+# limit, and released with the pod -- a hostPath share of the node's
+# hugetlbfs leaks pages the kubelet cannot account for. Requires the
+# hugepages-* limit on the container, which use_hugepage already renders.
 - name: hugepage
-  hostPath:
-    path: /dev/hugepages
+  emptyDir:
+    medium: HugePages
 {{- end }}
 {{- if $hasModel }}
 - name: model-storage

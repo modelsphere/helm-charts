@@ -387,6 +387,12 @@ storageKVOffload:
     master: null
     te_meta_data_server: null
     protocol: null
+    # The HCAs mooncake-store opens (e.g. mlx5_5, or "mlx5_3,mlx5_4" for
+    # multi-rail). Leave unset to let mooncake auto-pick -- which is dangerous
+    # on multi-rail clusters: different nodes happen to auto-pick different
+    # HCAs, and peers on incompatible rails fail at runtime with "Failed to
+    # open segment" errors that do not point at the cause. Set explicitly on
+    # any non-trivial cluster.
     device: null
     global_segment_size: null
     use_hugepage: false

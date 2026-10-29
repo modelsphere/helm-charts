@@ -350,12 +350,12 @@
               "type": ["string", "null"]
             },
             "device": {
-              "description": "Renders MOONCAKE_DEVICE. When unset on pd mode, the chart's existing runtime export of MOONCAKE_IB_DEVICE from NCCL_IB_HCA remains the source; when set, this value wins.",
+              "description": "Renders MOONCAKE_DEVICE. Unset means mooncake-store auto-picks HCAs, which is dangerous on multi-rail clusters (different nodes pick different rails, peers on incompatible rails fail at runtime). Set explicitly on any non-trivial cluster.",
               "type": ["string", "null"]
             },
             "global_segment_size": {
-              "description": "Renders MOONCAKE_GLOBAL_SEGMENT_SIZE (e.g. 1gb).",
-              "type": ["string", "null"]
+              "description": "Renders MOONCAKE_GLOBAL_SEGMENT_SIZE (e.g. 1gb, or 0 for a pure client that contributes no DRAM for storage-only placement). Integer accepted; template stringifies.",
+              "type": ["string", "integer", "null"]
             },
             "use_hugepage": {
               "description": "Drives three surfaces together: MC_STORE_USE_HUGEPAGE / MC_STORE_HUGEPAGE_SIZE env, a hugepages-<size> resource limit on the engine container, and a /dev/hugepages hostPath volume+mount.",
