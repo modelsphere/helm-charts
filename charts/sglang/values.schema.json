@@ -63,6 +63,10 @@
           "type": "array",
           "items": { "type": ["string", "integer", "number", "boolean"] }
         },
+        "env": {
+          "description": "Merged over the chart's engine env and the top-level user env for this role's pods; role entries win on collision with either. Same merge semantics as extraArgs: role overrides user overrides chart.",
+          "type": "array"
+        },
         "affinityReplace": {
           "description": "Full REPLACEMENT of the top-level affinity for this role's pods when defined -- two affinities never merge. null means inherit.",
           "type": ["object", "null"]

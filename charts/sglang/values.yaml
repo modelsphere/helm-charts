@@ -206,6 +206,11 @@ pd:
     # sets 0. Outside pd the engine falls back to top-level model.gpus.
     gpus: ""
     extraArgs: []
+    # Role-level env, merged last over chart env + top-level user env. Same
+    # merge semantics as extraArgs: an entry here wins against both. Use it
+    # for role-specific tuning (e.g. a prefill-only cache knob) rather than
+    # duplicating everything in top-level env.
+    env: []
     affinityReplace: null
     schedulerName: ""
   decode:
@@ -216,6 +221,7 @@ pd:
     distPort: ""
     gpus: ""
     extraArgs: []
+    env: []
     affinityReplace: null
     schedulerName: ""
 

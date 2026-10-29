@@ -482,8 +482,17 @@
         (dict "name" "MC_STORE_USE_HUGEPAGE" "value" "1")
         (dict "name" "MC_STORE_HUGEPAGE_SIZE" "value" $mooncakeHugepage.pageSize)) }}
   {{- end }}
+  {{- /* Role-level env (pd.<role>.env) merges AFTER the top-level env: a
+       role entry wins against both the chart env and the user's top-level
+       list. Implement by pre-merging roleCfg.env over $root.Values.env,
+       then handing the union to mergeEnv as its "user" side. Non-pd
+       callers pass no roleCfg.env and the chain is a no-op. */}}
+  {{- $userEnv := $root.Values.env | default list }}
+  {{- if $pdRole }}
+  {{- $userEnv = concat $userEnv ($roleCfg.env | default list) }}
+  {{- end }}
   env:
-  {{- include "sglang.mergeEnv" (dict "chart" $chartEnv "user" $root.Values.env "padding" 4) }}
+  {{- include "sglang.mergeEnv" (dict "chart" $chartEnv "user" $userEnv "padding" 4) }}
   {{- if $serves }}
   ports:
   - containerPort: {{ $httpPort }}
