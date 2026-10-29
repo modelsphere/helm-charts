@@ -553,15 +553,24 @@
   {{- end }}
   {{- end }}
   {{- /* K8s requires cpu+memory requests alongside any hugepages-* limit
-         (the API server rejects the pod otherwise). Set the floor at cpu: 1 /
-         memory: 4Gi so a hugepages-* user add-on never hits the admission
-         error with no obvious cause. User-set values for either key win. */}}
+         (the API server rejects the pod otherwise). This chart has no
+         hugepages-* render path of its own -- the only way one lands on an
+         engine container is the user setting it under resources: -- so gate
+         the floor on its presence. A user-set value in requests or limits
+         counts as "user has it" for that key. */}}
+  {{- $hasHugepage := false }}
+  {{- range $k, $_ := (index $res "limits" | default dict) }}
+  {{- if hasPrefix "hugepages-" $k }}{{ $hasHugepage = true }}{{ end }}
+  {{- end }}
+  {{- if $hasHugepage }}
   {{- $reqs := index $res "requests" | default dict }}
-  {{- if kindIs "invalid" (index $reqs "cpu") }}
+  {{- $lims := index $res "limits" | default dict }}
+  {{- if and (kindIs "invalid" (index $reqs "cpu")) (kindIs "invalid" (index $lims "cpu")) }}
   {{- $res = mergeOverwrite (deepCopy $res) (dict "requests" (dict "cpu" "1")) }}
   {{- end }}
-  {{- if kindIs "invalid" (index $reqs "memory") }}
+  {{- if and (kindIs "invalid" (index $reqs "memory")) (kindIs "invalid" (index $lims "memory")) }}
   {{- $res = mergeOverwrite (deepCopy $res) (dict "requests" (dict "memory" "4Gi")) }}
+  {{- end }}
   {{- end }}
   {{- with $res }}
   resources:
