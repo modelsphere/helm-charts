@@ -591,6 +591,18 @@
   {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict $hpKey $mooncakeHugepage.limit)) }}
   {{- end }}
   {{- end }}
+  {{- /* K8s requires cpu+memory requests alongside any hugepages-* limit
+         (the API server rejects the pod otherwise). Default them at the
+         engine pod's floor; a user-set value for either one wins, so nothing
+         here locks the deployment in. Only set when missing entirely -- the
+         merge semantics are the same as the hugepage limit above. */}}
+  {{- $reqs := index $res "requests" | default dict }}
+  {{- if kindIs "invalid" (index $reqs "cpu") }}
+  {{- $res = mergeOverwrite (deepCopy $res) (dict "requests" (dict "cpu" "1")) }}
+  {{- end }}
+  {{- if kindIs "invalid" (index $reqs "memory") }}
+  {{- $res = mergeOverwrite (deepCopy $res) (dict "requests" (dict "memory" "4Gi")) }}
+  {{- end }}
   {{- with $res }}
   resources:
     {{- toYaml . | nindent 4 }}
