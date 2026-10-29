@@ -552,7 +552,7 @@
   {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict "rdma/hca_shared" "1")) }}
   {{- end }}
   {{- end }}
-  {{- /* K8s requires cpu+memory requests alongside any hugepages-* limit
+  {{- /* K8s requires a cpu or memory request alongside any hugepages-* limit
          (the API server rejects the pod otherwise). This chart has no
          hugepages-* render path of its own -- the only way one lands on an
          engine container is the user setting it under resources: -- so gate

@@ -357,14 +357,15 @@ localKVOffload:
 #                     Engine argparse owns compat validation (same contract as
 #                     localKVOffload.hicache).
 #   - mooncake.*:     only the keys the user explicitly sets land on the pod as
-#                     MOONCAKE_* env vars. Unset keys default to existing chart
-#                     behavior -- notably, the pd runtime export of
-#                     MOONCAKE_IB_DEVICE from ${NCCL_IB_HCA} stays in effect
-#                     when mooncake.device is unset.
+#                     MOONCAKE_* env vars. Unset keys are absent on the rendered
+#                     pod. See the device knob below: on a multi-rail cluster
+#                     the auto-pick it enables is dangerous, so set it.
 #   - use_hugepage:   when true, emits the MC_STORE_USE_HUGEPAGE /
 #                     MC_STORE_HUGEPAGE_SIZE env, adds a hugepages-<size>
 #                     resource limit on the engine container, and adds a
-#                     /dev/hugepages hostPath volume + mount. The k8s resource
+#                     /dev/hugepages emptyDir volume + mount (medium:
+#                     HugePages -- per-pod, accounted against the pod's
+#                     hugepages limit, released with the pod). The k8s resource
 #                     suffix is derived from page_size via a small known-set
 #                     table (2MB/2Mi/2048KB/../... -> 2Mi; 1GB/1Gi/... -> 1Gi);
 #                     anything outside fails at render -- set resources.limits
@@ -391,6 +392,9 @@ storageKVOffload:
     storage-prefetch-retry-max-attempts: null
   mooncake:
     master: null
+    # With P2PHANDSHAKE, also set MOONCAKE_LOCAL_HOSTNAME via the top-level
+    # env: block using valueFrom.fieldRef.status.podIP, or peers dial
+    # "localhost" and fail.
     te_meta_data_server: null
     protocol: null
     # The HCAs mooncake-store opens (e.g. mlx5_5, or "mlx5_3,mlx5_4" for

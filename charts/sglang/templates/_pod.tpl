@@ -598,7 +598,7 @@
   {{- $res = mergeOverwrite (deepCopy $res) (dict "limits" (dict $hpKey $mooncakeHugepage.limit)) }}
   {{- end }}
   {{- end }}
-  {{- /* K8s rejects a pod with a hugepages-* limit unless cpu and memory both
+  {{- /* K8s rejects a pod with a hugepages-* limit unless cpu or memory
          appear in either requests or limits. Default them at a floor when
          absent everywhere, so a user's hugepages-only resource block does not
          trip admission. A user-set value in requests or limits counts as

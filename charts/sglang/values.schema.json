@@ -270,7 +270,7 @@
     },
 
     "storageKVOffload": {
-      "description": "sglang Hierarchical cache tiered to a storage backend (L3). Mutually exclusive with localKVOffload -- this block SUBSUMES it: setting storageKVOffload.enabled=true renders --enable-hierarchical-cache and the hicache argv from hicache:, so localKVOffload.enabled must stay false. hicache: knobs are spelled the same as in localKVOffload.hicache (verbatim --hicache-<key>=<value> pass-through, engine-side validation only). mooncake: env knobs are rendered ONLY when set -- unset ones defer to existing chart behavior (e.g. pd runtime exports MOONCAKE_IB_DEVICE from NCCL_IB_HCA). use_hugepage drives three surfaces at once: MC_STORE_* env, a hugepages-<size> k8s resource limit, and a /dev/hugepages hostPath volume+mount. Decode pods in pd mode receive none of this section.",
+      "description": "sglang Hierarchical cache tiered to a storage backend (L3). Mutually exclusive with localKVOffload -- this block SUBSUMES it: setting storageKVOffload.enabled=true renders --enable-hierarchical-cache and the hicache argv from hicache:, so localKVOffload.enabled must stay false. hicache: knobs are spelled the same as in localKVOffload.hicache (verbatim --hicache-<key>=<value> pass-through, engine-side validation only). mooncake: env knobs are rendered ONLY when set -- unset ones are simply absent (mooncake-store auto-detects, which has caveats on multi-rail clusters -- see the device knob). use_hugepage drives three surfaces at once: MC_STORE_* env, a hugepages-<size> k8s resource limit on the engine container, and a /dev/hugepages emptyDir volume+mount (medium: HugePages). Decode pods in pd mode receive none of this section.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -337,7 +337,7 @@
           }
         },
         "mooncake": {
-          "description": "MOONCAKE_* env knobs passed to the engine. Each is rendered ONLY when explicitly set -- unset defers to the chart's other behavior (notably the pd runtime export of MOONCAKE_IB_DEVICE from NCCL_IB_HCA, which an unset device preserves).",
+          "description": "MOONCAKE_* env knobs passed to the engine. Each is rendered ONLY when explicitly set -- unset keys are simply absent on the rendered pod (no fallback). See device below for why explicitly setting it matters on multi-rail clusters.",
           "type": "object",
           "additionalProperties": false,
           "properties": {
@@ -346,7 +346,7 @@
               "type": ["string", "null"]
             },
             "te_meta_data_server": {
-              "description": "Renders MOONCAKE_TE_META_DATA_SERVER (e.g. P2PHANDSHAKE).",
+              "description": "Renders MOONCAKE_TE_META_DATA_SERVER (e.g. P2PHANDSHAKE). With P2PHANDSHAKE, also set MOONCAKE_LOCAL_HOSTNAME via the top-level env: block using valueFrom.fieldRef.status.podIP, or peers dial 'localhost' and fail.",
               "type": ["string", "null"]
             },
             "protocol": {
@@ -362,7 +362,7 @@
               "type": ["string", "integer", "null"]
             },
             "use_hugepage": {
-              "description": "Drives three surfaces together: MC_STORE_USE_HUGEPAGE / MC_STORE_HUGEPAGE_SIZE env, a hugepages-<size> resource limit on the engine container, and a /dev/hugepages hostPath volume+mount.",
+              "description": "Drives three surfaces together: MC_STORE_USE_HUGEPAGE / MC_STORE_HUGEPAGE_SIZE env, a hugepages-<size> resource limit on the engine container, and a /dev/hugepages emptyDir volume+mount (medium: HugePages -- per-pod, accounted against the pod's hugepages limit, released with the pod).",
               "type": "boolean"
             },
             "hugepage": {
