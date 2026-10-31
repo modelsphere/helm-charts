@@ -28,6 +28,9 @@ spec:
     - jsonPath: .spec.priority
       name: Priority
       type: integer
+    - jsonPath: .spec.maximumDeployment.type
+      name: Bounds_Type
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -243,6 +246,8 @@ spec:
               message: maximumDeployment.value must be 0 when minimumDeployment.value is 0 (scale-to-zero is only for temporarily suspending the service)
             - rule: "!has(self.maximumDeployment) || self.maximumDeployment.type != 'pdengine' || self.maximumDeployment.value != 1"
               message: maximumDeployment.value 1 is unsatisfiable for type pdengine (a PD service needs at least 1 prefill and 1 decode engine); use 0 to disable the service
+            - rule: "!has(self.maximumDeployment) || self.minimumDeployment.type == self.maximumDeployment.type"
+              message: minimumDeployment.type and maximumDeployment.type must match (bounds in mixed units are ambiguous)
         type: object
     served: true
     storage: true
