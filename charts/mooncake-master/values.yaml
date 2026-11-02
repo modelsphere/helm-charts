@@ -27,9 +27,10 @@ fullnameOverride: ""
 master:
   replicas: 2
   command: [mooncake_master]
-  # Election key namespace in etcd. Keep the default unless every client can be told
-  # otherwise: Mooncake store clients look the leader up under "mooncake_cluster" and
-  # have no option to change it, so a master with any other id is never found.
+  # Election key namespace in etcd (mooncake-store/<clusterId>/master_view). Clients
+  # look the leader up under MC_STORE_CLUSTER_ID, or "mooncake_cluster" when it is
+  # unset, so a master with any other id is only found by clients that export the
+  # same value. Releases that share one external etcd must each use their own id.
   clusterId: mooncake_cluster
   ports:
     rpc: 50051
@@ -108,9 +109,13 @@ etcd:
     size: 10Gi
   # Expose the client port on every node, for Mooncake clients that run outside
   # Kubernetes (e.g. engines started with docker) and cannot resolve a Service name.
+  # The port is plain HTTP without authentication: anything that reaches a node can
+  # rewrite the election keys. Mooncake's etcd client supports neither TLS nor auth,
+  # so restrict it at the network level and acknowledge with allowInsecureExternal.
   nodePort:
     enabled: false
     port: 32379
+    allowInsecureExternal: false
   resources:
     requests: {cpu: 500m, memory: 1Gi}
     limits: {cpu: "2", memory: 4Gi}
@@ -141,6 +146,11 @@ nofRegistrar:
   resources:
     requests: {cpu: 100m, memory: 256Mi}
     limits: {cpu: 500m, memory: 512Mi}
+
+# PodDisruptionBudgets for voluntary disruptions such as node drains: at most one
+# master at a time, and never below etcd's quorum.
+podDisruptionBudget:
+  enabled: true
 
 serviceMonitor:
   enabled: false

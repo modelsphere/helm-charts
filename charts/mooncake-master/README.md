@@ -30,6 +30,15 @@ ha:
   connstring: http://etcd-0:2379;http://etcd-1:2379;http://etcd-2:2379
 ```
 
+### Several Mooncake clusters
+
+Each release with the bundled etcd has its own etcd, so releases never see each
+other's election. Releases that share one external etcd must use distinct ids:
+set `master.clusterId` per release, and give that release's clients the same value
+in `MC_STORE_CLUSTER_ID`. Clients without it look under the default,
+`mooncake_cluster`, and never find a master elected under another id. The install
+notes print the variable when the id is not the default.
+
 ## Requirements
 
 **The Mooncake build must include etcd HA, on both sides.** `mooncake_master` and
@@ -69,6 +78,24 @@ Verified on a two-master install, with the bundled etcd and the default image.
   the new leader serving. The recreated pod may win the next election: the
   StatefulSet recreates it under the same name, so compare pod UIDs, not names,
   when you check a failover.
+
+## Security
+
+The election etcd runs plain HTTP without authentication, and Mooncake's etcd
+client supports neither TLS nor auth, so the chart cannot add them on its own.
+Whoever can reach the etcd client port can rewrite the election keys. Inside the
+cluster, limit it with a NetworkPolicy if pods you do not trust share the
+network. `etcd.nodePort.enabled` opens it on every node; the chart refuses it
+unless `etcd.nodePort.allowInsecureExternal=true` is set as well, so that
+exposure is a deliberate choice. Keep that port reachable from the client nodes
+only.
+
+## Disruptions
+
+`podDisruptionBudget.enabled` (on by default) adds two PodDisruptionBudgets:
+at most one master unavailable at a time, and at least a majority of etcd
+members available (2 of 3). A node drain then waits instead of evicting both
+masters, or two etcd members, at once.
 
 ## NVMe-oF volumes (`nofRegistrar`)
 
@@ -137,12 +164,13 @@ workloads.
 |---|---|---|
 | `image.repository` / `image.tag` | `lmsysorg/sglang` / `v0.5.21` | any image with an etcd-enabled `mooncake_master` |
 | `master.replicas` | `2` | must be at least 2 |
-| `master.clusterId` | `mooncake_cluster` | election key namespace; clients only look under the default, so change it only if your clients can be configured to match |
+| `master.clusterId` | `mooncake_cluster` | election key namespace; clients must export the same value as `MC_STORE_CLUSTER_ID` when it is not the default |
 | `master.hostNetwork` | `true` | gives the master a stable, node-routable address, and lets it reach storage networks |
 | `master.runtimeClassName` | `""` | the NVIDIA RuntimeClass, when the Mooncake build links `libcuda`; add `NVIDIA_VISIBLE_DEVICES=none` to `master.env` to inject the driver without a GPU (legacy-mode class; CDI mode rejects `none`) |
 | `master.terminationGracePeriodSeconds` | `10` | see failover time above |
 | `ha.connstring` | `""` | external etcd endpoints; empty means the bundled etcd |
 | `etcd.enabled` | `true` | three-member etcd, one member per node |
-| `etcd.nodePort.enabled` | `false` | exposes etcd on every node, for clients outside Kubernetes |
+| `etcd.nodePort.enabled` | `false` | exposes etcd on every node, for clients outside Kubernetes; needs `etcd.nodePort.allowInsecureExternal=true` |
+| `podDisruptionBudget.enabled` | `true` | one master at a time, etcd keeps its quorum |
 | `nofRegistrar.enabled` | `false` | see above |
 | `serviceMonitor.enabled` | `false` | scrapes the masters' metrics port |

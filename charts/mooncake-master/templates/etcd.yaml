@@ -5,6 +5,9 @@
 {{- if lt (int $e.replicas) 3 }}
 {{- fail "mooncake-master: etcd.replicas must be >= 3 (an odd number): the election needs a quorum that survives losing a member" }}
 {{- end }}
+{{- if and $e.nodePort.enabled (not $e.nodePort.allowInsecureExternal) }}
+{{- fail "mooncake-master: etcd.nodePort.enabled exposes the election etcd on every node without TLS or auth; set etcd.nodePort.allowInsecureExternal=true to confirm" }}
+{{- end }}
 # Peer discovery: each member gets a stable DNS name, published before it is ready
 # because members must find each other before there is a quorum.
 apiVersion: v1
