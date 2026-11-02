@@ -959,6 +959,29 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/minimax-h3-0.2.0/minimax-h3-0.2.0.tgz
     version: 0.2.0
+  mooncake-master:
+  - apiVersion: v2
+    appVersion: 0.3.13
+    created: "2026-11-02T07:50:43.946134751Z"
+    description: 'Highly available Mooncake Store masters: two or more mooncake_master
+      replicas electing a leader through etcd (bundled or external), with an optional
+      sidecar that re-registers NVMe-oF volumes on whichever master wins'
+    digest: 1be36f5f4aafb8e51cdb549e4c58030031d1f789a8861f70ee3c227d822672af
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - mooncake
+    - kv-cache
+    - high-availability
+    - etcd
+    - nvme-of
+    name: mooncake-master
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/kvcache-ai/Mooncake
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/mooncake-master-0.1.0/mooncake-master-0.1.0.tgz
+    version: 0.1.0
   openresty:
   - apiVersion: v2
     appVersion: 0.1.28
@@ -2876,4 +2899,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-11-02T00:38:38.103827804Z"
+generated: "2026-11-02T07:50:43.946289018Z"
