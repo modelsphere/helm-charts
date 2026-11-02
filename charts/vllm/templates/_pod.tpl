@@ -524,7 +524,7 @@
   {{- if $cacheEnabled }}
   {{- $engineEnv = concat $engineEnv (list
         (dict "name" "VLLM_CACHE_HOST_DIR" "value" "/var/cache/vllm-host")
-        (dict "name" "VLLM_CACHE_TEMPLATE_HASH" "value" (include "vllm.cacheTemplateHash" (dict "root" $root "role" $role "roleCfg" (.roleCfg | default dict))))
+        (dict "name" "VLLM_CACHE_TEMPLATE_HASH" "value" (include "vllm.cacheTemplateHash" (dict "root" $root "role" $role "roleCfg" $roleCfg "pdRole" $pdRole)))
         (dict "name" "VLLM_CACHE_MAX_SLOTS" "value" (printf "%v" ($cache.maxSlotsPerNode | default 8)))
         (dict "name" "VLLM_CACHE_HISTORY_LIMIT" "value" (printf "%v" ($cache.historyLimit | default 2)))) }}
   {{- end }}

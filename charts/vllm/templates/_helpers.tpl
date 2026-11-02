@@ -99,18 +99,19 @@
   --pipeline-parallel-size live), the calling pd role's extraArgs, and
   compiler-relevant environment variables.
   pd.<role>.extraArgs are appended after the top-level list on the command line
-  (_pod.tpl, including colocate). They are hashed for this pod's role, and only
+  (_pod.tpl, including colocate). They are hashed when pdRole is true, and only
   when that list is non-empty, so a non-pd render and a pd role with no role
-  flags keep the previous input list.
+  flags keep the previous input list. pdRole comes from vllm.engineIdentity.
   The GPU type is not an input: the cache is a hostPath, so it never leaves the
   node, and vLLM keys its own torch.compile cache on the hardware as well.
 
-  include "vllm.cacheTemplateHash" (dict "root" $root "role" $role "roleCfg" $roleCfg)
+  include "vllm.cacheTemplateHash" (dict "root" $root "role" $role "roleCfg" $roleCfg "pdRole" $pdRole)
 */}}
 {{- define "vllm.cacheTemplateHash" -}}
 {{- $root := .root -}}
 {{- $role := .role | default "" -}}
 {{- $roleCfg := .roleCfg | default dict -}}
+{{- $pdRole := .pdRole | default false -}}
 {{- $envList := list -}}
 {{- range $root.Values.env -}}
   {{- $envList = append $envList (printf "%s=%s" .name (include "vllm.envValueString" .value)) -}}
@@ -128,7 +129,7 @@
       $ctxLen
       $root.Values.extraArgs
 -}}
-{{- if or (hasPrefix "prefill-" $role) (hasPrefix "decode-" $role) -}}
+{{- if $pdRole -}}
 {{- $roleArgs := $roleCfg.extraArgs | default list -}}
 {{- if $roleArgs -}}
 {{- $inputs = append $inputs $roleArgs -}}

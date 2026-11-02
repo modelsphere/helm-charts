@@ -88,16 +88,17 @@
   image repo & tag, model name, context length, extraArgs, the calling pd role's
   extraArgs, and compiler-relevant environment variables.
   pd.<role>.extraArgs are appended after the top-level list on the command line
-  (_pod.tpl, including colocate). They are hashed for this pod's role, and only
+  (_pod.tpl, including colocate). They are hashed when pdRole is true, and only
   when that list is non-empty, so a non-pd render and a pd role with no role
-  flags keep the previous input list.
+  flags keep the previous input list. pdRole comes from sglang.engineIdentity.
 
-  include "sglang.cacheTemplateHash" (dict "root" $root "role" $role "roleCfg" $roleCfg)
+  include "sglang.cacheTemplateHash" (dict "root" $root "role" $role "roleCfg" $roleCfg "pdRole" $pdRole)
 */}}
 {{- define "sglang.cacheTemplateHash" -}}
 {{- $root := .root -}}
 {{- $role := .role | default "" -}}
 {{- $roleCfg := .roleCfg | default dict -}}
+{{- $pdRole := .pdRole | default false -}}
 {{- $envList := list -}}
 {{- range $root.Values.env -}}
   {{- $envList = append $envList (printf "%s=%s" .name (include "sglang.envValueString" .value)) -}}
@@ -111,7 +112,7 @@
       $root.Values.model.contextLength
       $root.Values.extraArgs
 -}}
-{{- if or (hasPrefix "prefill-" $role) (hasPrefix "decode-" $role) -}}
+{{- if $pdRole -}}
 {{- $roleArgs := $roleCfg.extraArgs | default list -}}
 {{- if $roleArgs -}}
 {{- $inputs = append $inputs $roleArgs -}}
