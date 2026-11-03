@@ -437,6 +437,8 @@ model:
   # plugins, GPU webhooks and quota all key off the key being there.
   gpus: "1"
   # The resource name model.gpus (and pd.<role>.gpus) is rendered under.
+  # Must be domain-prefixed (<dns-subdomain>/<name>); built-in names such as
+  # cpu or memory are rejected by the schema.
   # Default nvidia.com/gpu. An Ascend node is volcano.sh/Ascend910B4-1
   # (or huawei.com/Ascend910). The chart tolerates this same key
   # (Exists, NoSchedule) -- see tolerations below.

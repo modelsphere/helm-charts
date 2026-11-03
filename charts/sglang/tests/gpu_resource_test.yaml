@@ -148,6 +148,22 @@ tests:
       - failedTemplate:
           errorPattern: "gpuResource"
 
+  - it: schema rejects unprefixed gpuResource cpu
+    template: templates/deployment.yaml
+    set:
+      model.gpuResource: cpu
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpuResource"
+
+  - it: schema rejects unprefixed gpuResource memory
+    template: templates/deployment.yaml
+    set:
+      model.gpuResource: memory
+    asserts:
+      - failedTemplate:
+          errorPattern: "gpuResource"
+
   - it: lws renders the custom limit on leader and worker
     template: templates/lws.yaml
     documentSelector:
