@@ -246,10 +246,11 @@ pd:
     # the same node (the only selector that proves the hostPath-resident
     # weights are actually there, because prefill's model-check ran on that
     # node), plus the user's top-level tolerations with the same
-    # nvidia.com/gpu NoSchedule auto-add the engine pod gets -- without it
-    # the router would pend against its own affinity. The *Replace fields
-    # fully swap their blocks rather than merge: set them to run the
-    # router on a separate LB tier instead of on the prefill node.
+    # model.gpuResource (default nvidia.com/gpu) NoSchedule auto-add the
+    # engine pod gets -- without it the router would pend against its own
+    # affinity. The *Replace fields fully swap their blocks rather than
+    # merge: set them to run the router on a separate LB tier instead of on
+    # the prefill node.
     affinityReplace: null
     tolerationsReplace: null
     # Readiness. In both pd shapes the router container carries an exec
@@ -431,10 +432,15 @@ model:
   # Empty (the default) omits --context-length, so SGLang uses the model's own.
   # Only set it when you really mean to cap the context.
   contextLength: ""
-  # Empty or "0" leaves nvidia.com/gpu off the pod entirely rather than
-  # requesting zero of it: the two schedule alike, but device plugins, GPU
-  # webhooks and quota all key off the key being there.
+  # Empty or "0" leaves the resource named by gpuResource off the pod entirely
+  # rather than requesting zero of it: the two schedule alike, but device
+  # plugins, GPU webhooks and quota all key off the key being there.
   gpus: "1"
+  # The resource name model.gpus (and pd.<role>.gpus) is rendered under.
+  # Default nvidia.com/gpu. An Ascend node is volcano.sh/Ascend910B4-1
+  # (or huawei.com/Ascend910). The chart tolerates this same key
+  # (Exists, NoSchedule) -- see tolerations below.
+  gpuResource: "nvidia.com/gpu"
 
 # Init container that checks the mounted model directory before the engine gets
 # a chance to start. hostPathType: Directory already catches a missing path; this
@@ -1238,11 +1244,11 @@ volumeMounts: []
   # - name: shm
   #   mountPath: /dev/shm
 
-# Do not set nvidia.com/gpu here -- model.gpus renders it, and the chart refuses
-# a second spelling rather than let the two drift. Other extended resources do
-# belong here, e.g. an RDMA device from the shared-device plugin -- though for
-# RDMA as a whole, rdma.enabled below (lws.enabled pods only)
-# sets this, IPC_LOCK and the injector label together:
+# Do not set model.gpuResource (default nvidia.com/gpu) here -- model.gpus
+# renders it, and the chart refuses a second spelling rather than let the two
+# drift. Other extended resources do belong here, e.g. an RDMA device from the
+# shared-device plugin -- though for RDMA as a whole, rdma.enabled below
+# (lws.enabled pods only) sets this, IPC_LOCK and the injector label together:
 #
 #   limits: { rdma/hca_shared: "1" }
 resources: {}
@@ -1429,7 +1435,8 @@ priorityClassName: ""
 nodeSelector: {}
 
 # The chart always ADDS one toleration of its own, for the taint that marks
-# accelerator nodes as compute-only:
+# accelerator nodes as compute-only. The key is model.gpuResource (default
+# nvidia.com/gpu):
 #
 #   nvidia.com/gpu  Exists  NoSchedule
 #
@@ -1446,9 +1453,9 @@ nodeSelector: {}
 # It is added to this list rather than being its default value, because Helm
 # replaces lists wholesale: a values file setting `tolerations` for an unrelated
 # reason would otherwise drop it without saying so. To override, name the same
-# key here and your own entry wins. For example, to tolerate only the
-# compute-only value, so a node someone taints nvidia.com/gpu=broken to
-# quarantine it stays off limits:
+# key (model.gpuResource) here and your own entry wins. For example, with the
+# default model.gpuResource, to tolerate only the compute-only value, so a
+# node someone taints nvidia.com/gpu=broken to quarantine it stays off limits:
 #
 #   tolerations:
 #     - { key: nvidia.com/gpu, operator: Equal, value: compute-only, effect: NoSchedule }

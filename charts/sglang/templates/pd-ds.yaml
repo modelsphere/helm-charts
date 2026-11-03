@@ -477,19 +477,20 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- /* Tolerations: inherit the user's top-level list AND the engine
-             pod's nvidia.com/gpu NoSchedule auto-add (_pod.tpl, same
+             pod's model.gpuResource NoSchedule auto-add (_pod.tpl, same
              construction). Once podAffinity pins the router to a GPU node the
              toleration stops being optional -- without it the router pends
              against its own affinity. A user entry for the same key wins, so
              narrowing (tolerate one value only) still works. A null
              tolerationsReplace hands the whole block to the user. */ -}}
       {{- $rtol := default (list) $root.Values.tolerations }}
+      {{- $gpuRes := include "sglang.gpuResource" $root }}
       {{- $rtolHasGpu := false }}
       {{- range $rtol }}
-      {{- if eq (.key | default "") "nvidia.com/gpu" }}{{- $rtolHasGpu = true }}{{- end }}
+      {{- if eq (.key | default "") $gpuRes }}{{- $rtolHasGpu = true }}{{- end }}
       {{- end }}
       {{- if not $rtolHasGpu }}
-      {{- $rtol = concat (list (dict "key" "nvidia.com/gpu" "operator" "Exists" "effect" "NoSchedule")) $rtol }}
+      {{- $rtol = concat (list (dict "key" $gpuRes "operator" "Exists" "effect" "NoSchedule")) $rtol }}
       {{- end }}
       {{- if not (kindIs "invalid" $pd.router.tolerationsReplace) }}{{ if $pd.router.tolerationsReplace }}{{ $rtol = $pd.router.tolerationsReplace }}{{ end }}
       {{- end }}
