@@ -115,8 +115,7 @@ spec:
       # handed to --prefill explicitly, exactly as in pd-ds.yaml, never let to
       # smg's default (which would trap the decode side onto its own port).
       - name: router
-        {{- $img := $pd.router.imageOverride | default dict }}
-        image: "{{ $img.repository | default "lightseekorg/smg" }}:{{ $img.tag | default "1.14.0" }}"
+        image: "{{ include "sglang.pdRouterImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |

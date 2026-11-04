@@ -181,8 +181,7 @@ spec:
              loop just blocks until the full set shows up. */}}
       initContainers:
       - name: wait-upstreams
-        {{- $img := $pd.router.imageOverride | default dict }}
-        image: "{{ $img.repository | default "lightseekorg/smg" }}:{{ $img.tag | default "1.14.0" }}"
+        image: "{{ include "sglang.pdRouterImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |
@@ -202,7 +201,7 @@ spec:
           done
       containers:
       - name: router
-        image: "{{ $img.repository | default "lightseekorg/smg" }}:{{ $img.tag | default "1.14.0" }}"
+        image: "{{ include "sglang.pdRouterImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |

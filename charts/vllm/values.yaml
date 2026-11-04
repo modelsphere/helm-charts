@@ -307,7 +307,8 @@ pd:
     backend: ""
     # The Rust vllm-router is a SEPARATE image from the vllm-openai engine
     # image. The default below is a real published image. Set repository/tag
-    # to mirror a private build.
+    # to mirror a private build, and set both: a field left out keeps its
+    # default below.
     imageOverride:
       repository: "vllm/vllm-router"
       tag: "v0.1.16.1"

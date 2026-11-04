@@ -215,8 +215,7 @@ spec:
              loop just blocks until the full set shows up. */}}
       initContainers:
       - name: wait-upstreams
-        {{- $img := $pd.router.imageOverride | default dict }}
-        image: "{{ $img.repository | default "vllm/vllm-router" }}:{{ $img.tag | default "v0.1.16.1" }}"
+        image: "{{ include "vllm.pdRouterImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |
@@ -236,7 +235,7 @@ spec:
           done
       containers:
       - name: router
-        image: "{{ $img.repository | default "vllm/vllm-router" }}:{{ $img.tag | default "v0.1.16.1" }}"
+        image: "{{ include "vllm.pdRouterImage" $root }}"
         command: ["bash", "-lc"]
         args:
         - |

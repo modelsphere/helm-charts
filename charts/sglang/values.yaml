@@ -233,7 +233,8 @@ pd:
     # Forwarded verbatim as --policy.
     policy: cache_aware
     # smg is a SEPARATE image from the sglang engine image. The default below
-    # is a real published image. Set repository/tag to mirror a private build.
+    # is a real published image. Set repository/tag to mirror a private build,
+    # and set both: a field left out keeps its default below.
     imageOverride:
       repository: "lightseekorg/smg"
       tag: "1.14.0"
