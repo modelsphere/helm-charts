@@ -246,11 +246,10 @@ pd:
     # the same node (the only selector that proves the hostPath-resident
     # weights are actually there, because prefill's model-check ran on that
     # node), plus the user's top-level tolerations with the same
-    # model.gpuResource (default nvidia.com/gpu) NoSchedule auto-add the
-    # engine pod gets -- without it the router would pend against its own
-    # affinity. The *Replace fields fully swap their blocks rather than
-    # merge: set them to run the router on a separate LB tier instead of on
-    # the prefill node.
+    # nvidia.com/gpu NoSchedule auto-add the engine pod gets -- without it
+    # the router would pend against its own affinity. The *Replace fields
+    # fully swap their blocks rather than merge: set them to run the
+    # router on a separate LB tier instead of on the prefill node.
     affinityReplace: null
     tolerationsReplace: null
     # Readiness. In both pd shapes the router container carries an exec
@@ -440,8 +439,7 @@ model:
   # Must be domain-prefixed (<dns-subdomain>/<name>); built-in names such as
   # cpu or memory are rejected by the schema.
   # Default nvidia.com/gpu. An Ascend node is volcano.sh/Ascend910B4-1
-  # (or huawei.com/Ascend910). The chart tolerates this same key
-  # (Exists, NoSchedule) -- see tolerations below.
+  # (or huawei.com/Ascend910).
   gpuResource: "nvidia.com/gpu"
 
 # Init container that checks the mounted model directory before the engine gets
@@ -1437,8 +1435,7 @@ priorityClassName: ""
 nodeSelector: {}
 
 # The chart always ADDS one toleration of its own, for the taint that marks
-# accelerator nodes as compute-only. The key is model.gpuResource (default
-# nvidia.com/gpu):
+# accelerator nodes as compute-only:
 #
 #   nvidia.com/gpu  Exists  NoSchedule
 #
@@ -1455,9 +1452,9 @@ nodeSelector: {}
 # It is added to this list rather than being its default value, because Helm
 # replaces lists wholesale: a values file setting `tolerations` for an unrelated
 # reason would otherwise drop it without saying so. To override, name the same
-# key (model.gpuResource) here and your own entry wins. For example, with the
-# default model.gpuResource, to tolerate only the compute-only value, so a
-# node someone taints nvidia.com/gpu=broken to quarantine it stays off limits:
+# key here and your own entry wins. For example, to tolerate only the
+# compute-only value, so a node someone taints nvidia.com/gpu=broken to
+# quarantine it stays off limits:
 #
 #   tolerations:
 #     - { key: nvidia.com/gpu, operator: Equal, value: compute-only, effect: NoSchedule }

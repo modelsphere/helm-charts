@@ -412,7 +412,7 @@
           "type": ["string", "integer"]
         },
         "gpuResource": {
-          "description": "Extended-resource name model.gpus and pd.<role>.gpus are rendered under, and the key of the NoSchedule toleration the chart adds. Must be domain-prefixed (<dns-subdomain>/<name>); built-in names like cpu or memory are rejected. Default nvidia.com/gpu. An Ascend node is volcano.sh/Ascend910B4-1.",
+          "description": "Extended-resource name model.gpus and pd.<role>.gpus are rendered under. Must be domain-prefixed (<dns-subdomain>/<name>); built-in names like cpu or memory are rejected. Default nvidia.com/gpu. An Ascend node is volcano.sh/Ascend910B4-1.",
           "type": "string",
           "minLength": 1,
           "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$"

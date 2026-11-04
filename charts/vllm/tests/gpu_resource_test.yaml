@@ -1,6 +1,6 @@
 # model.gpuResource is the extended-resource name model.gpus / pd.<role>.gpus
-# is rendered under, and the key of the NoSchedule toleration the chart adds.
-# Default nvidia.com/gpu, so a stock render is unchanged.
+# is rendered under. Default nvidia.com/gpu, so a stock render is unchanged.
+# Tolerations do not follow it: the auto-added toleration stays nvidia.com/gpu.
 suite: gpu resource name
 release:
   name: ci
@@ -22,7 +22,7 @@ tests:
               operator: Exists
               effect: NoSchedule
 
-  - it: a custom gpuResource is the limit and the toleration
+  - it: a custom gpuResource is the limit; the toleration stays nvidia.com/gpu
     template: templates/deployment.yaml
     set:
       model.gpuResource: volcano.sh/Ascend910B4-1
@@ -37,11 +37,11 @@ tests:
       - equal:
           path: spec.template.spec.tolerations
           value:
-            - key: volcano.sh/Ascend910B4-1
+            - key: nvidia.com/gpu
               operator: Exists
               effect: NoSchedule
 
-  - it: gpus 0 omits the configured resource and still tolerates it
+  - it: gpus 0 omits the configured resource; the toleration stays nvidia.com/gpu
     template: templates/deployment.yaml
     set:
       model.gpus: "0"
@@ -52,44 +52,9 @@ tests:
       - equal:
           path: spec.template.spec.tolerations
           value:
-            - key: volcano.sh/Ascend910B4-1
+            - key: nvidia.com/gpu
               operator: Exists
               effect: NoSchedule
-
-  - it: a user toleration for the configured key is not duplicated
-    template: templates/deployment.yaml
-    set:
-      model.gpuResource: volcano.sh/Ascend910B4-1
-      tolerations:
-        - key: volcano.sh/Ascend910B4-1
-          operator: Equal
-          value: compute-only
-          effect: NoSchedule
-    asserts:
-      - equal:
-          path: spec.template.spec.tolerations
-          value:
-            - key: volcano.sh/Ascend910B4-1
-              operator: Equal
-              value: compute-only
-              effect: NoSchedule
-
-  - it: a toleration for another key does not suppress gpuResource
-    template: templates/deployment.yaml
-    set:
-      model.gpuResource: volcano.sh/Ascend910B4-1
-      tolerations:
-        - key: foo
-          operator: Exists
-    asserts:
-      - equal:
-          path: spec.template.spec.tolerations
-          value:
-            - key: volcano.sh/Ascend910B4-1
-              operator: Exists
-              effect: NoSchedule
-            - key: foo
-              operator: Exists
 
   - it: refuses the configured resource under resources.limits
     template: templates/deployment.yaml
@@ -188,13 +153,13 @@ tests:
       - equal:
           path: spec.leaderWorkerTemplate.leaderTemplate.spec.tolerations
           value:
-            - key: volcano.sh/Ascend910B4-1
+            - key: nvidia.com/gpu
               operator: Exists
               effect: NoSchedule
       - equal:
           path: spec.leaderWorkerTemplate.workerTemplate.spec.tolerations
           value:
-            - key: volcano.sh/Ascend910B4-1
+            - key: nvidia.com/gpu
               operator: Exists
               effect: NoSchedule
 
@@ -231,17 +196,17 @@ tests:
       - contains:
           path: spec.roles[?(@.name == "prefill")].spec.leaderWorkerTemplate.leaderTemplate.spec.tolerations
           content:
-            key: volcano.sh/Ascend910B4-1
+            key: nvidia.com/gpu
             operator: Exists
             effect: NoSchedule
       - contains:
           path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.leaderTemplate.spec.tolerations
           content:
-            key: volcano.sh/Ascend910B4-1
+            key: nvidia.com/gpu
             operator: Exists
             effect: NoSchedule
 
-  - it: pd router toleration uses gpuResource
+  - it: pd router toleration stays nvidia.com/gpu with a custom gpuResource
     template: templates/pd-ds.yaml
     documentSelector:
       path: kind
@@ -257,13 +222,15 @@ tests:
       - contains:
           path: spec.template.spec.tolerations
           content:
-            key: volcano.sh/Ascend910B4-1
+            key: nvidia.com/gpu
             operator: Exists
             effect: NoSchedule
       - notContains:
           path: spec.template.spec.tolerations
           content:
-            key: nvidia.com/gpu
+            key: volcano.sh/Ascend910B4-1
+            operator: Exists
+            effect: NoSchedule
 
   - it: pd colocate renders the custom key per engine
     template: templates/pd-colocate.yaml
@@ -293,11 +260,11 @@ tests:
       - equal:
           path: spec.template.spec.tolerations
           value:
-            - key: volcano.sh/Ascend910B4-1
+            - key: nvidia.com/gpu
               operator: Exists
               effect: NoSchedule
 
-  - it: mooncake master toleration uses gpuResource
+  - it: mooncake master toleration stays nvidia.com/gpu with a custom gpuResource
     template: templates/mc-master.yaml
     documentSelector:
       path: kind
@@ -310,6 +277,6 @@ tests:
       - equal:
           path: spec.template.spec.tolerations
           value:
-            - key: volcano.sh/Ascend910B4-1
+            - key: nvidia.com/gpu
               operator: Exists
               effect: NoSchedule

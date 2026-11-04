@@ -985,13 +985,12 @@ affinity:
        only thing one would add is no toleration at all, and a GPU engine has
        no use for that. */}}
 {{- $tols := default (list) $root.Values.tolerations }}
-{{- $gpuRes := include "vllm.gpuResource" $root }}
 {{- $hasGpuTol := false }}
 {{- range $tols }}
-{{- if eq (.key | default "") $gpuRes }}{{- $hasGpuTol = true }}{{- end }}
+{{- if eq (.key | default "") "nvidia.com/gpu" }}{{- $hasGpuTol = true }}{{- end }}
 {{- end }}
 {{- if not $hasGpuTol }}
-{{- $tols = concat (list (dict "key" $gpuRes "operator" "Exists" "effect" "NoSchedule")) $tols }}
+{{- $tols = concat (list (dict "key" "nvidia.com/gpu" "operator" "Exists" "effect" "NoSchedule")) $tols }}
 {{- end }}
 {{- with $tols }}
 tolerations:

@@ -55,10 +55,9 @@
 {{- end -}}
 
 {{/*
-  The extended-resource name model.gpus and pd.<role>.gpus are rendered under,
-  and the key of the NoSchedule toleration this chart adds. Empty or whitespace
-  falls back to nvidia.com/gpu. Trimmed, so a padded value does not request a
-  different key than it tolerates.
+  The extended-resource name model.gpus and pd.<role>.gpus are rendered under.
+  Empty or whitespace falls back to nvidia.com/gpu. Trimmed, so a padded value
+  renders the same key the resources guard checks.
 */}}
 {{- define "vllm.gpuResource" -}}
 {{- .Values.model.gpuResource | default "" | trim | default "nvidia.com/gpu" -}}

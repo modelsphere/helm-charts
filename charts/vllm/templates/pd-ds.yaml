@@ -443,13 +443,12 @@ spec:
              the router pod can land on the same pool as its engines. A user
              entry for the same key wins. */}}
       {{- $rtols := default (list) $rtol }}
-      {{- $gpuRes := include "vllm.gpuResource" $root }}
       {{- $rhasGpuTol := false }}
       {{- range $rtols }}
-      {{- if eq (.key | default "") $gpuRes }}{{- $rhasGpuTol = true }}{{- end }}
+      {{- if eq (.key | default "") "nvidia.com/gpu" }}{{- $rhasGpuTol = true }}{{- end }}
       {{- end }}
       {{- if not $rhasGpuTol }}
-      {{- $rtols = concat (list (dict "key" $gpuRes "operator" "Exists" "effect" "NoSchedule")) $rtols }}
+      {{- $rtols = concat (list (dict "key" "nvidia.com/gpu" "operator" "Exists" "effect" "NoSchedule")) $rtols }}
       {{- end }}
       {{- with $rtols }}
       tolerations:
