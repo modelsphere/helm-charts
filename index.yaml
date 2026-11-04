@@ -964,6 +964,22 @@ entries:
     version: 0.2.1
   minimax-h3:
   - apiVersion: v2
+    appVersion: 0.2.2
+    created: "2026-11-04T07:42:36.057293474Z"
+    description: Self-hosted MiniMax H3-compatible video generation for the open-weight
+      MiniMax H3 models -- H3 Router, H3 Server and SGLang in one release, with separate
+      FL2VA and Ref2VA pools
+    digest: 556ca5cd70f3ea719207b7e70153c14ec8c51815a66aa00929e687a51b7ee7f9
+    home: https://github.com/modelsphere/minimax-h3-server
+    name: minimax-h3
+    sources:
+    - https://github.com/modelsphere/minimax-h3-server
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/minimax-h3-0.2.2/minimax-h3-0.2.2.tgz
+    version: 0.2.2
+  - apiVersion: v2
     appVersion: 0.2.0
     created: "2026-10-26T08:09:49.899532145Z"
     description: Self-hosted MiniMax H3-compatible video generation for the open-weight
@@ -3017,4 +3033,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-11-04T06:51:01.520890535Z"
+generated: "2026-11-04T07:42:36.057587527Z"
