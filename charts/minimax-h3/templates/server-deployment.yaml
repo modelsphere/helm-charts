@@ -94,11 +94,27 @@ metadata:
     minimax-h3/pool: {{ $poolName }}
 spec:
   {{- if not $root.Values.scaler.enabled }}
-  replicas: {{ $pool.replicaCount | default 1 }}
+  {{- /* hasKey, not default: replicaCount: 0 parks a pool and must stay 0. */}}
+  replicas: {{ if hasKey $pool "replicaCount" }}{{ $pool.replicaCount }}{{ else }}1{{ end }}
   {{- else }}
-  # replicas is deliberately absent while scaler.enabled: the pool's LLMScaler
-  # writes spec.replicas, and a chart value would take the field back (or fail
-  # on a server-side apply conflict) on every helm upgrade.
+  {{- /*
+    The pool's LLMScaler owns the count. Dropping the field is not an option: on
+    an upgrade helm removes it from the object, the API server defaults it to 1,
+    and the extra Pods are killed mid-task until the scaler sizes the pool back.
+    So echo the LIVE count, which makes the upgrade a no-op for this field (and,
+    being the same value, no server-side apply conflict with the operator).
+    Before the Deployment exists, start at the scaler's minReplicas: the count
+    the scaler would set on its first reconcile, so the first sync changes nothing.
+    lookup is empty under plain `helm template` / helm-diff without
+    --dry-run=server, which therefore shows minReplicas here.
+  */}}
+  {{- $live := lookup "apps/v1" "Deployment" $root.Release.Namespace $name }}
+  {{- $ps := default (dict) $pool.scaler }}
+  {{- if and $live $live.spec (hasKey $live.spec "replicas") }}
+  replicas: {{ $live.spec.replicas }}
+  {{- else }}
+  replicas: {{ ternary $ps.minReplicas $root.Values.scaler.minReplicas (hasKey $ps "minReplicas") | int }}
+  {{- end }}
   {{- end }}
   {{/*
     用 Deployment 而不是 StatefulSet:

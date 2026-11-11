@@ -1,0 +1,81 @@
+# Pool replica counts. Without the scaler the chart sets them (0 included).
+# With the scaler the LLMScaler owns them, and the chart echoes the live count
+# rather than dropping the field: a dropped field defaults to 1 on upgrade and
+# kills the extra Pods mid-task.
+suite: pool replicas
+release:
+  name: h3
+  namespace: minimax-h3
+templates:
+  - templates/server-deployment.yaml
+set:
+  database.url: postgresql://unused
+tests:
+  - it: replicaCount 0 stays 0
+    set:
+      pools.fl2va.replicaCount: 0
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - equal: {path: spec.replicas, value: 0}
+
+  - it: a missing replicaCount falls back to 1
+    set:
+      pools.fl2va.replicaCount: null
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - equal: {path: spec.replicas, value: 1}
+
+  - it: with the scaler and no Deployment yet, start at the scaler's minReplicas
+    set:
+      scaler.enabled: true
+      scaler.minReplicas: 2
+      pools.fl2va.replicaCount: 5
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - equal: {path: spec.replicas, value: 2}
+
+  - it: a pool's own scaler.minReplicas wins, 0 included
+    set:
+      scaler.enabled: true
+      scaler.minReplicas: 2
+      pools.fl2va.scaler.minReplicas: 0
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - equal: {path: spec.replicas, value: 0}
+
+  - it: with the scaler and a live Deployment, keep the live count
+    set:
+      scaler.enabled: true
+      pools.fl2va.replicaCount: 1
+    kubernetesProvider:
+      scheme:
+        "apps/v1/Deployment":
+          gvr: {group: apps, version: v1, resource: deployments}
+          namespaced: true
+      objects:
+        - apiVersion: apps/v1
+          kind: Deployment
+          metadata: {name: h3-minimax-h3-server-fl2va, namespace: minimax-h3}
+          # Quoted: helm-unittest's fake client cannot deep-copy a YAML int
+          # ("cannot deep copy int"); a real lookup returns int64, which renders the same.
+          spec: {replicas: "3"}
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - equal: {path: spec.replicas, value: 3}
+
+  - it: without the scaler a live Deployment does not matter
+    set:
+      pools.fl2va.replicaCount: 1
+    kubernetesProvider:
+      scheme:
+        "apps/v1/Deployment":
+          gvr: {group: apps, version: v1, resource: deployments}
+          namespaced: true
+      objects:
+        - apiVersion: apps/v1
+          kind: Deployment
+          metadata: {name: h3-minimax-h3-server-fl2va, namespace: minimax-h3}
+          spec: {replicas: "3"}
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - equal: {path: spec.replicas, value: 1}

@@ -166,12 +166,12 @@ tests:
       - equal: {path: spec.replicas, value: 1}
         documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
 
-  - it: scaler.enabled drops spec.replicas
+  - it: scaler.enabled ignores replicaCount (see replicas_test.yaml)
     set:
       scaler.enabled: true
       pools.fl2va.replicaCount: 3
     asserts:
-      - notExists: {path: spec.replicas}
+      - equal: {path: spec.replicas, value: 1}
         documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
 
   - it: keys this chart has no use for render cleanly
@@ -182,3 +182,29 @@ tests:
       modelRoute.monitor.outputConfigMap: llm-route/monitor-conf
     asserts:
       - notFailedTemplate: {}
+
+  - it: a pool on a PVC gets no derived hostPath
+    set:
+      model.localPath: /m
+      pools.fl2va.sglang.model.existingClaim: weights
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: model, persistentVolumeClaim: {claimName: weights, readOnly: true}}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+
+  - it: an external SGLang needs no model path, even without a subdir
+    set:
+      sglang.enabled: false
+      server.externalSglangUrl: http://sglang.example:30010
+      pools.ref2va.enabled: false
+      router.enabled: false
+      pools.fl2va.modelSubdir: ""
+    asserts:
+      - notFailedTemplate: {}
+      - notContains:
+          path: spec.template.spec.volumes
+          content: {name: model}
+          any: true
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+

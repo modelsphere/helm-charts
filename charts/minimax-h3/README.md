@@ -51,6 +51,15 @@ client ──► Router (Deployment, stateless, optional)
 | GPUs | 4 per SGLang replica (`nvidia.com/gpu: 4`), NVIDIA device plugin or GPU Operator |
 | Weights | hostPath `<model.localPath>/{FL2VA,Ref2VA,Turbo}`, or `/data/models/MiniMax-H3/{FL2VA,Ref2VA}` + `/data/models/Minimax-h3-Turbo` without `model.localPath`, **synced to the GPU nodes first**; a PVC works too |
 
+## Upgrading to 0.3
+
+- **`pools.fl2va.replicaCount` now defaults to 1 (was 2).** A release that relied on the default
+  shrinks to one FL2VA replica on upgrade. Set `replicaCount` explicitly to keep the old size.
+- The per-pool model paths are no longer defaults in `values.yaml`. Without `model.localPath`
+  they resolve to the same `/data/models/...` paths as before, and explicit `hostPath` values win.
+- `database.fromSecret` now defaults to the modelsphere CNPG cluster. See [Database](#database),
+  and the warning there about sharing one database.
+
 ## Install
 
 ```bash
@@ -425,10 +434,13 @@ the read-write Service on purpose. The chart `lookup`s that Secret and writes th
 - `lookup` needs a live cluster. Plain `helm template`, and helm-diff without
   `--dry-run=server`, see nothing and the render fails: pass `database.url` or
   `database.existingSecret` there.
-- **Two releases must not share a database**: a worker claims any queued task of its
-  capability, so the releases would run each other's tasks. A second release sets its own
-  `database.fromSecret.{user,database}` (create them with the CNPG `Database`/role CRDs) or
-  its own `database.url`.
+
+> [!WARNING]
+> **Two releases must not share a database.** The default points every release at the same
+> `minimaxh3` database. Workers claim any queued task of their capability, so two releases on
+> one database run, and fail, each other's tasks. A second release needs its own database:
+> create a user and database (the CNPG `Database` / role CRDs) and set
+> `database.fromSecret.{user,database}`, or give its own `database.url`.
 
 ## Generic engine values (swiss)
 
@@ -449,11 +461,12 @@ The chart accepts the values a generic catalog deploy service such as
 
 Pool Pods carry `app: <release>-minimax-h3` (Pod template only; the Deployment selectors are
 unchanged, they are immutable). The route name resolves `modelRoute.nginx.route` → `serviceId`
-→ `modelRoute.route`; `server.config.publicBaseUrl`, when set, must end in `/<route>`, and
-`__ROUTE__` in it is replaced by the route name. When `publicBaseUrl` is empty,
+→ `modelRoute.route`. An explicit `server.config.publicBaseUrl` is used as given (a dedicated
+domain is fine), with `__ROUTE__` in it replaced by the route name. When it is empty,
 `modelRoute.url` (the release's public URL through the gateway, `<gateway>/<route>`, written by
-swiss for video engines) is used instead, under the same check; with neither, H3 infers the base
-from the request headers.
+swiss for video engines) is used instead, and that one must end in `/<route>`: openresty strips
+the prefix and H3 adds it back to download URLs. With neither, H3 infers the base from the
+request headers.
 
 ## Autoscaling
 
@@ -462,8 +475,11 @@ Off by default. Per enabled pool, keyed by the pool's Deployment name
 
 - `scaler.enabled` renders an `LLMScaler` (`autoscaling.modelsphere.dev/v1alpha1`, Custom provider)
   targeting the pool Deployment and following the decision server at `scaler.serverAddress`.
-  **The pool Deployments then carry no `spec.replicas`**: the operator owns the field, and
-  `pools.<pool>.replicaCount` is ignored.
+  The operator owns the replica count and `pools.<pool>.replicaCount` is ignored. The chart
+  still renders `spec.replicas`, as the **live** count of the existing Deployment (read with
+  `lookup`), so an upgrade never resizes the pool: a dropped field would default to 1 and kill
+  the extra Pods mid-task. Before the Deployment exists it starts at the scaler's `minReplicas`.
+  Plain `helm template` (no `lookup`) shows `minReplicas`.
 - `sloRequirement.enabled` renders a `JobSLORequirement` (`inference.modelsphere.dev/v1alpha1`)
   sizing the pool from its queue backlog.
 

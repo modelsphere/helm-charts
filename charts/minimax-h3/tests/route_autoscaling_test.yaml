@@ -60,13 +60,16 @@ tests:
     asserts:
       - failedTemplate: {errorPattern: needs modelRoute.nginx.outputConfigMap}
 
-  - it: publicBaseUrl must end in the resolved route
+  - it: an explicit publicBaseUrl is taken as given, route tail or not
     templates: [templates/server-deployment.yaml]
     set:
       serviceId: h3-test
-      server.config.publicBaseUrl: https://gw.example.com/minimax-h3
+      server.config.publicBaseUrl: https://h3.example.com
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
     asserts:
-      - failedTemplate: {errorPattern: must end in /h3-test}
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_PUBLIC_BASE_URL, value: https://h3.example.com}
 
   - it: __ROUTE__ in publicBaseUrl follows the route
     templates: [templates/server-deployment.yaml]

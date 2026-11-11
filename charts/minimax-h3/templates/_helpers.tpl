@@ -186,9 +186,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $route) -}}
 {{- fail (printf "modelRoute: route name %q (modelRoute.nginx.route > serviceId > modelRoute.route) must be lowercase alphanumerics, '-' or '.', starting and ending alphanumeric: it is the ModelRoute's name and the external path prefix" $route) -}}
 {{- end -}}
+{{- /* Only the derived value is checked. An explicit server.config.publicBaseUrl is
+       the operator's own statement -- a dedicated domain (https://h3.example.com)
+       in front of the gateway is legitimate -- so it is taken as given. */}}
+{{- if not .Values.server.config.publicBaseUrl -}}
 {{- $base := trimSuffix "/" (include "minimax-h3.publicBaseUrl" .) -}}
 {{- if and $base (not (hasSuffix (printf "/%s" $route) $base)) -}}
-{{- fail (printf "public base URL %q (server.config.publicBaseUrl, else modelRoute.url) must end in /%s, the route name: openresty strips that prefix and H3 adds it back to download URLs from this base. Use __ROUTE__ in publicBaseUrl to follow the route" $base $route) -}}
+{{- fail (printf "modelRoute.url %q must end in /%s, the route name: openresty strips that prefix and H3 adds it back to download URLs from this base. Fix modelRoute.url, or set server.config.publicBaseUrl explicitly" $base $route) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- if and (not .Values.sglang.enabled) (not .Values.server.externalSglangUrl) -}}
@@ -221,14 +226,18 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $own := deepCopy (default (dict) $pool.sglang) -}}
 {{- $merged := mergeOverwrite (deepCopy $root.Values.sglang) (deepCopy $own) -}}
 {{- $model := default (dict) $root.Values.model -}}
-{{- if not (default (dict) $own.model).hostPath -}}
-{{- $subdir := $pool.modelSubdir | default (get (dict "fl2va" "FL2VA" "ref2va" "Ref2VA") .pool) -}}
-{{- if not $subdir -}}
-{{- fail (printf "pools.%s.modelSubdir is required unless pools.%s.sglang.model.hostPath is set" .pool .pool) -}}
-{{- end -}}
-{{- $base := trimSuffix "/" ($model.localPath | default "/data/models/MiniMax-H3") -}}
 {{- if not $merged.model -}}{{- $_ := set $merged "model" (dict) -}}{{- end -}}
+{{- /* No path to derive when the weights come from a PVC or the pool runs no
+       in-Pod SGLang (sglang.enabled false: an external backend). */}}
+{{- if and $merged.enabled (not $merged.model.existingClaim) (not (default (dict) $own.model).hostPath) -}}
+{{- $subdir := $pool.modelSubdir | default (get (dict "fl2va" "FL2VA" "ref2va" "Ref2VA") .pool) -}}
+{{- if $subdir -}}
+{{- $base := trimSuffix "/" ($model.localPath | default "/data/models/MiniMax-H3") -}}
 {{- $_ := set $merged.model "hostPath" (printf "%s/%s" $base (trimPrefix "/" $subdir)) -}}
+{{- else if not $root.Values.sglang.model.hostPath -}}
+{{- fail (printf "pools.%s: set modelSubdir, sglang.model.hostPath or sglang.model.existingClaim" .pool) -}}
+{{- end -}}
+{{- /* A pool without a subdir keeps the shared sglang.model.hostPath from the merge. */}}
 {{- end -}}
 {{- if and (not (hasKey $own "gpuCount")) (ne (toString (default "" $model.gpus)) "") -}}
 {{- $_ := set $merged "gpuCount" $model.gpus -}}
