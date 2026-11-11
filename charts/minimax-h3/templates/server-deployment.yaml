@@ -93,7 +93,13 @@ metadata:
     app.kubernetes.io/component: server
     minimax-h3/pool: {{ $poolName }}
 spec:
-  replicas: {{ $pool.replicaCount }}
+  {{- if not $root.Values.scaler.enabled }}
+  replicas: {{ $pool.replicaCount | default 1 }}
+  {{- else }}
+  # replicas is deliberately absent while scaler.enabled: the pool's LLMScaler
+  # writes spec.replicas, and a chart value would take the field back (or fail
+  # on a server-side apply conflict) on every helm upgrade.
+  {{- end }}
   {{/*
     用 Deployment 而不是 StatefulSet:
       * StatefulSet **没有 maxSurge**,同一个 Pod 名先删后建 —— 单副本池在滚动更新时
@@ -132,6 +138,9 @@ spec:
         {{- include "minimax-h3.labels" $root | nindent 8 }}
         app.kubernetes.io/component: server
         minimax-h3/pool: {{ $poolName }}
+        # Engine Pod label generic deploy tooling selects by. Template only: the
+        # selector above is immutable and stays as it was.
+        app: {{ include "minimax-h3.appLabel" $root }}
       {{- with $root.Values.server.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
@@ -212,7 +221,7 @@ spec:
               value: {{ $root.Values.server.config.queryRetentionDays | quote }}
             - name: H3_ASSET_RETENTION_DAYS
               value: {{ $root.Values.server.config.assetRetentionDays | quote }}
-            {{- with $root.Values.server.config.publicBaseUrl }}
+            {{- with include "minimax-h3.publicBaseUrl" $root }}
             - name: H3_PUBLIC_BASE_URL
               value: {{ . | quote }}
             {{- end }}
@@ -425,8 +434,8 @@ spec:
           {{- end }}
           resources:
             {{- $res := deepCopy $sglang.resources }}
-            {{- $_ := set (default (dict) $res.limits) "nvidia.com/gpu" $sglang.gpuCount }}
-            {{- $_ := set (default (dict) $res.requests) "nvidia.com/gpu" $sglang.gpuCount }}
+            {{- $_ := set (default (dict) $res.limits) $sglang.gpuResource (int $sglang.gpuCount) }}
+            {{- $_ := set (default (dict) $res.requests) $sglang.gpuResource (int $sglang.gpuCount) }}
             {{- toYaml $res | nindent 12 }}
         {{- end }}
       volumes:
@@ -451,7 +460,7 @@ spec:
         {{- if $turboEnabled }}
         - name: ref2va-lora
           hostPath:
-            path: {{ $turbo.lora.hostPath | quote }}
+            path: {{ include "minimax-h3.turboLoraPath" (dict "root" $root "pool" $pool) | quote }}
             type: Directory
         {{- end }}
         {{- with $sglang.extraVolumes }}
@@ -474,22 +483,13 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if $sched.affinity }}
+      {{- /* For SGLang pools, affinity already carries sglang.gpuProduct (nvidia.com/gpu.product
+             hard affinity) and the top-level affinity, see minimax-h3.poolSglang. Mixing GPU
+             models in one pool is real: the same 768P/4s generation runs 170s on an A100 and
+             68s on an H800 (2.5x). */}}
+      {{- with $sched.affinity }}
       affinity:
-        {{- toYaml $sched.affinity | nindent 8 }}
-      {{- else if and $sglang.enabled $sglang.gpuProduct }}
-      {{- /* 没写 affinity 但限定了 GPU 机型:按 nvidia.com/gpu.product 标签硬亲和。
-             两种机型的差距是真实的 —— 同样 768P/4s,A100 执行 170s、H800 68s(2.5×),
-             同一个池混机型会让延迟不可预期。 */}}
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: nvidia.com/gpu.product
-                    operator: In
-                    values:
-                      {{- toYaml $sglang.gpuProduct | nindent 22 }}
+        {{- toYaml . | nindent 8 }}
       {{- end }}
 {{- end }}
 {{- end }}

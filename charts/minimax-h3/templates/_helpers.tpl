@@ -46,7 +46,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if and $f.name $f.namespace -}}
 {{- $sec := lookup "v1" "Secret" $f.namespace $f.name -}}
 {{- if and $sec $sec.data (hasKey $sec.data $f.passwordKey) -}}
-{{- printf "postgresql://%s:%s@%s.%s.svc.cluster.local:%v/%s" $f.user (index $sec.data $f.passwordKey | b64dec) $f.name $f.namespace $f.port $f.database -}}
+{{- $host := $f.host | default (printf "%s.%s.svc.cluster.local" $f.name $f.namespace) -}}
+{{- printf "postgresql://%s:%s@%s:%v/%s" $f.user (index $sec.data $f.passwordKey | b64dec) $host $f.port $f.database -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -148,6 +149,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if eq $name "ref2va" -}}
 {{- include "minimax-h3.ref2vaTurbo.validate" (dict "root" $ "pool" $pool "sglang" $sg) -}}
 {{- end -}}
+{{- if $sg.enabled -}}
+{{- $gpus := $sg.gpuCount -}}
+{{- if not (regexMatch "^[0-9]+$" (toString $gpus)) -}}
+{{- fail (printf "pool %s: GPU count %q (model.gpus / sglang.gpuCount) must be a positive integer" $name (toString $gpus)) -}}
+{{- end -}}
+{{- $par := mul (int $sg.args.tpSize) (int $sg.args.ulyssesDegree) -}}
+{{- if ne (int $gpus) (int $par) -}}
+{{- fail (printf "pool %s: %d GPUs per Pod (model.gpus / sglang.gpuCount) must equal tpSize (%d) x ulyssesDegree (%d) = %d; set pools.%s.sglang.args or the GPU count so they agree" $name (int $gpus) (int $sg.args.tpSize) (int $sg.args.ulyssesDegree) (int $par) $name) -}}
+{{- end -}}
+{{- end -}}
 {{- if and $sg.enabled $sg.preStop.enabled -}}
 {{- $linger := int $sg.preStop.lingerSeconds -}}
 {{- $deadline := int $sg.preStop.drainDeadlineSeconds -}}
@@ -168,7 +179,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if not .Values.database.fromSecret.name -}}
 {{- fail "database: set database.url (postgresql://user:pass@host:5432/db), database.existingSecret, or database.fromSecret.namespace/name to read the password from the PostgreSQL chart's Secret" -}}
 {{- end -}}
-{{- fail (printf "拼不出数据库连接串:没有 database.url,也没能从 Secret %s/%s 读到 %s。helm template 不连集群(lookup 恒空),纯渲染请显式给 database.url;实际部署请确认 PG 已装、且当前身份能读它的 Secret" .Values.database.fromSecret.namespace .Values.database.fromSecret.name .Values.database.fromSecret.passwordKey) -}}
+{{- fail (printf "database: no database.url, and no %q key could be read from Secret %s/%s (the default is the modelsphere installer's CloudNativePG cluster). lookup sees nothing under plain `helm template` or helm-diff without --dry-run=server: pass database.url or database.existingSecret there. On a live install, check that PostgreSQL is installed and that the installing identity can read that Secret" .Values.database.fromSecret.passwordKey .Values.database.fromSecret.namespace .Values.database.fromSecret.name) -}}
+{{- end -}}
+{{- if .Values.modelRoute.enabled -}}
+{{- $route := include "minimax-h3.route" . -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" $route) -}}
+{{- fail (printf "modelRoute: route name %q (modelRoute.nginx.route > serviceId > modelRoute.route) must be lowercase alphanumerics, '-' or '.', starting and ending alphanumeric: it is the ModelRoute's name and the external path prefix" $route) -}}
+{{- end -}}
+{{- $base := trimSuffix "/" (include "minimax-h3.publicBaseUrl" .) -}}
+{{- if and $base (not (hasSuffix (printf "/%s" $route) $base)) -}}
+{{- fail (printf "server.config.publicBaseUrl %q must end in /%s, the route name: openresty strips that prefix and H3 adds it back to download URLs from this base. Use __ROUTE__ in the value to follow the route" $base $route) -}}
+{{- end -}}
 {{- end -}}
 {{- if and (not .Values.sglang.enabled) (not .Values.server.externalSglangUrl) -}}
 {{- fail "sglang.enabled=false 时必须设置 server.externalSglangUrl" -}}
@@ -176,10 +197,97 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end -}}
 
-{{/* 池内 sglang 配置 = 公共默认 + 池覆盖 */}}
+{{/*
+  Effective SGLang config of a pool = shared sglang defaults + the pool's own
+  sglang overrides, plus the values resolved from the top-level model.* and
+  scheduling keys. Validation and the Deployment both read this, so the two can
+  never disagree.
+
+    model.hostPath     pool's own explicit hostPath > <model.localPath>/<modelSubdir>
+                       > /data/models/MiniMax-H3/<modelSubdir> (the pre-0.3 default).
+                       The shared sglang.model.hostPath is not read: the pool
+                       defaults always overrode it.
+    gpuCount           pool's own gpuCount > model.gpus > sglang.gpuCount
+    gpuResource        sglang (pool or shared) > model.gpuResource > nvidia.com/gpu
+    schedulerName,     sglang (pool or shared) > top-level value
+    priorityClassName
+    affinity           sglang (pool or shared) affinity, as is; else the top-level
+                       affinity with sglang.gpuProduct ANDed into every required
+                       nodeSelectorTerm (or a term of its own when there is none).
+*/}}
 {{- define "minimax-h3.poolSglang" -}}
-{{- $merged := mergeOverwrite (deepCopy .root.Values.sglang) (default (dict) (index .root.Values.pools .pool).sglang) -}}
+{{- $root := .root -}}
+{{- $pool := index $root.Values.pools .pool -}}
+{{- $own := deepCopy (default (dict) $pool.sglang) -}}
+{{- $merged := mergeOverwrite (deepCopy $root.Values.sglang) (deepCopy $own) -}}
+{{- $model := default (dict) $root.Values.model -}}
+{{- if not (default (dict) $own.model).hostPath -}}
+{{- $subdir := $pool.modelSubdir | default (get (dict "fl2va" "FL2VA" "ref2va" "Ref2VA") .pool) -}}
+{{- if not $subdir -}}
+{{- fail (printf "pools.%s.modelSubdir is required unless pools.%s.sglang.model.hostPath is set" .pool .pool) -}}
+{{- end -}}
+{{- $base := trimSuffix "/" ($model.localPath | default "/data/models/MiniMax-H3") -}}
+{{- if not $merged.model -}}{{- $_ := set $merged "model" (dict) -}}{{- end -}}
+{{- $_ := set $merged.model "hostPath" (printf "%s/%s" $base (trimPrefix "/" $subdir)) -}}
+{{- end -}}
+{{- if and (not (hasKey $own "gpuCount")) (ne (toString (default "" $model.gpus)) "") -}}
+{{- $_ := set $merged "gpuCount" $model.gpus -}}
+{{- end -}}
+{{- $_ := set $merged "gpuResource" ($merged.gpuResource | default $model.gpuResource | default "nvidia.com/gpu") -}}
+{{- $_ := set $merged "schedulerName" ($merged.schedulerName | default $root.Values.schedulerName) -}}
+{{- $_ := set $merged "priorityClassName" ($merged.priorityClassName | default $root.Values.priorityClassName) -}}
+{{- if not $merged.affinity -}}
+{{- $aff := deepCopy (default (dict) $root.Values.affinity) -}}
+{{- if $merged.gpuProduct -}}
+{{- $expr := dict "key" "nvidia.com/gpu.product" "operator" "In" "values" $merged.gpuProduct -}}
+{{- $na := default (dict) $aff.nodeAffinity -}}
+{{- $req := default (dict) (get $na "requiredDuringSchedulingIgnoredDuringExecution") -}}
+{{- $terms := list -}}
+{{- range (default (list) $req.nodeSelectorTerms) -}}
+{{- $t := deepCopy . -}}
+{{- $_ := set $t "matchExpressions" (append (default (list) $t.matchExpressions) $expr) -}}
+{{- $terms = append $terms $t -}}
+{{- end -}}
+{{- if not $terms -}}{{- $terms = list (dict "matchExpressions" (list $expr)) -}}{{- end -}}
+{{- $_ := set $req "nodeSelectorTerms" $terms -}}
+{{- $_ := set $na "requiredDuringSchedulingIgnoredDuringExecution" $req -}}
+{{- $_ := set $aff "nodeAffinity" $na -}}
+{{- end -}}
+{{- $_ := set $merged "affinity" $aff -}}
+{{- end -}}
 {{- toYaml $merged -}}
+{{- end -}}
+
+{{/* Host path of the Ref2VA Turbo LoRA: explicit hostPath > <model.localPath>/<subdir> > the pre-0.3 default. */}}
+{{- define "minimax-h3.turboLoraPath" -}}
+{{- $lora := default (dict) (default (dict) .pool.turbo).lora -}}
+{{- $model := default (dict) .root.Values.model -}}
+{{- if $lora.hostPath -}}
+{{- $lora.hostPath -}}
+{{- else if $model.localPath -}}
+{{- printf "%s/%s" (trimSuffix "/" $model.localPath) (trimPrefix "/" ($lora.subdir | default "Turbo")) -}}
+{{- else -}}
+/data/models/Minimax-h3-Turbo
+{{- end -}}
+{{- end -}}
+
+{{/* Label generic deploy tooling (swiss) selects engine Pods by: app=<release>-<chart>. */}}
+{{- define "minimax-h3.appLabel" -}}
+{{- printf "%s-%s" .Release.Name .Chart.Name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
+  Route name: modelRoute.nginx.route > serviceId > modelRoute.route (legacy).
+  It is the external path prefix and the ModelRoute's name.
+*/}}
+{{- define "minimax-h3.route" -}}
+{{- $mr := default (dict) .Values.modelRoute -}}
+{{- coalesce (default (dict) $mr.nginx).route .Values.serviceId $mr.route "" -}}
+{{- end -}}
+
+{{/* server.config.publicBaseUrl with __ROUTE__ replaced by the route name. */}}
+{{- define "minimax-h3.publicBaseUrl" -}}
+{{- (.Values.server.config.publicBaseUrl | default "") | replace "__ROUTE__" (include "minimax-h3.route" .) -}}
 {{- end -}}
 
 {{/* Reject legacy overrides rather than silently detaching LoRA from sampling. */}}
@@ -218,8 +326,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if not .sglang.enabled -}}
 {{- fail "pools.ref2va.turbo.enabled=true requires an in-Pod SGLang (sglang.enabled=true); external Turbo backends are not supported" -}}
 {{- end -}}
-{{- if not (hasPrefix "/" (required "pools.ref2va.turbo.lora.hostPath is required" $turbo.lora.hostPath)) -}}
-{{- fail "pools.ref2va.turbo.lora.hostPath must be absolute" -}}
+{{- if not (hasPrefix "/" (include "minimax-h3.turboLoraPath" (dict "root" .root "pool" .pool))) -}}
+{{- fail "pools.ref2va.turbo.lora.hostPath (or model.localPath) must be absolute" -}}
 {{- end -}}
 {{- $_ := required "pools.ref2va.turbo.lora.weightName is required" $turbo.lora.weightName -}}
 {{- range $key := list "numInferenceSteps" "flowShift" "audioFlowShift" -}}

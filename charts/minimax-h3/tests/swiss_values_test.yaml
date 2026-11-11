@@ -1,0 +1,184 @@
+# Values in the shape a generic catalog engine (swiss) writes: model.localPath,
+# model.gpus as a string, serviceId, top-level scheduling keys, nginx.* route keys.
+# The explicit per-pool keys existing releases set still win.
+suite: generic engine values (model path, GPUs, scheduling, labels)
+release:
+  name: h3-test
+  namespace: h3-test
+templates:
+  - templates/server-deployment.yaml
+set:
+  database.url: postgresql://unused
+tests:
+  - it: without model.localPath the weights stay at the old default paths
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: model, hostPath: {path: /data/models/MiniMax-H3/FL2VA, type: Directory}}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: model, hostPath: {path: /data/models/MiniMax-H3/Ref2VA, type: Directory}}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: ref2va}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: ref2va-lora, hostPath: {path: /data/models/Minimax-h3-Turbo, type: Directory}}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: ref2va}
+
+  - it: model.localPath prefixes each pool's subdir and the Turbo LoRA
+    set:
+      model.localPath: /mnt/disk0/models/MiniMaxAI/MiniMax-H3/
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: model, hostPath: {path: /mnt/disk0/models/MiniMaxAI/MiniMax-H3/FL2VA, type: Directory}}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: model, hostPath: {path: /mnt/disk0/models/MiniMaxAI/MiniMax-H3/Ref2VA, type: Directory}}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: ref2va}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: ref2va-lora, hostPath: {path: /mnt/disk0/models/MiniMaxAI/MiniMax-H3/Turbo, type: Directory}}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: ref2va}
+
+  - it: subdirs are per-pool values
+    set:
+      model.localPath: /m
+      pools.fl2va.modelSubdir: fl
+      pools.ref2va.turbo.lora.subdir: lora/turbo
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: model, hostPath: {path: /m/fl, type: Directory}}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: ref2va-lora, hostPath: {path: /m/lora/turbo, type: Directory}}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: ref2va}
+
+  - it: an explicit hostPath wins over model.localPath
+    set:
+      model.localPath: /mnt/disk0/models/MiniMaxAI/MiniMax-H3
+      pools.ref2va.sglang.model.hostPath: /pinned/Ref2VA
+      pools.ref2va.turbo.lora.hostPath: /pinned/Turbo
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: model, hostPath: {path: /pinned/Ref2VA, type: Directory}}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: ref2va}
+      - contains:
+          path: spec.template.spec.volumes
+          content: {name: ref2va-lora, hostPath: {path: /pinned/Turbo, type: Directory}}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: ref2va}
+
+  - it: model.gpus as a string sets the GPU request and --num-gpus
+    set:
+      model.gpus: "4"
+      model.gpuResource: example.com/gpu
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "sglang")].resources.limits["example.com/gpu"]
+          value: 4
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - notExists:
+          path: spec.template.spec.containers[?(@.name == "sglang")].resources.limits["nvidia.com/gpu"]
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args
+          content: "4"
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+
+  - it: model.gpus that disagrees with tpSize x ulyssesDegree fails
+    set:
+      model.gpus: "8"
+    asserts:
+      - failedTemplate:
+          errorPattern: "pool fl2va: 8 GPUs per Pod .* must equal tpSize \\(4\\) x ulyssesDegree \\(1\\) = 4"
+
+  - it: a pool that sets its own gpuCount and parallelism is not overridden by model.gpus
+    set:
+      model.gpus: 8
+      pools.fl2va.sglang.args.tpSize: 8
+      pools.ref2va.sglang.gpuCount: 4
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "sglang")].resources.limits["nvidia.com/gpu"]
+          value: 8
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "sglang")].resources.limits["nvidia.com/gpu"]
+          value: 4
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: ref2va}
+
+  - it: top-level scheduling applies when sglang leaves it unset, gpuProduct ANDed in
+    set:
+      schedulerName: volcano
+      priorityClassName: inference-prod
+      sglang.gpuProduct: [NVIDIA-H800]
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions: [{key: zone, operator: In, values: [a]}]
+    asserts:
+      - equal: {path: spec.template.spec.schedulerName, value: volcano}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - equal: {path: spec.template.spec.priorityClassName, value: inference-prod}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms
+          value:
+            - matchExpressions:
+                - {key: zone, operator: In, values: [a]}
+                - {key: nvidia.com/gpu.product, operator: In, values: [NVIDIA-H800]}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+
+  - it: pool-level sglang scheduling wins entirely
+    set:
+      schedulerName: volcano
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms: [{matchExpressions: [{key: zone, operator: In, values: [a]}]}]
+      pools.fl2va.sglang.schedulerName: other
+      pools.fl2va.sglang.affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms: [{matchExpressions: [{key: host, operator: In, values: [x]}]}]
+    asserts:
+      - equal: {path: spec.template.spec.schedulerName, value: other}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms
+          value: [{matchExpressions: [{key: host, operator: In, values: [x]}]}]
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+
+  - it: pool Pods carry app=<release>-minimax-h3; selectors do not
+    asserts:
+      - equal: {path: "spec.template.metadata.labels.app", value: h3-test-minimax-h3}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - notExists: {path: spec.selector.matchLabels.app}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+
+  - it: pool replicas default to 1
+    asserts:
+      - equal: {path: spec.replicas, value: 1}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+
+  - it: scaler.enabled drops spec.replicas
+    set:
+      scaler.enabled: true
+      pools.fl2va.replicaCount: 3
+    asserts:
+      - notExists: {path: spec.replicas}
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+
+  - it: keys this chart has no use for render cleanly
+    set:
+      cart.enabled: false
+      cache: {enabled: true, hostPath: /cache, maxSlotsPerNode: 2}
+      image: {repository: ignored/engine, tag: x}
+      modelRoute.monitor.outputConfigMap: llm-route/monitor-conf
+    asserts:
+      - notFailedTemplate: {}
