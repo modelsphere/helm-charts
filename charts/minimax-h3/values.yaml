@@ -181,6 +181,7 @@ server:
     # 前缀,下载 URL 要靠这里把前缀带回来 —— 尾巴与 modelRoute.route 必须一致。
     # __ROUTE__ in the value is replaced by the resolved route name, so one
     # site-wide setting (https://gw.example.com/__ROUTE__) fits every release.
+    # Empty: modelRoute.url, else inferred from the request headers.
     publicBaseUrl: ""
     mediaTimeoutSeconds: 30
     backendTimeoutSeconds: 30
@@ -348,6 +349,10 @@ modelRoute:
     outputConfigMap: ""
     # Alternative to service: a label selector for the openresty Pods.
     selector: ""
+  # The release's public URL through the gateway (<gateway>/<route>), as a deploy
+  # service writes it. Used as server.config.publicBaseUrl when that is empty;
+  # must end in /<route> like it.
+  url: ""
   # Legacy spellings of nginx.service / nginx.outputConfigMap.
   openrestyService: ""        # 例如 <ns>/openresty
   outputConfigMap: ""         # 例如 <ns>/openresty-conf

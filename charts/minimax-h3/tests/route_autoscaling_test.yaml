@@ -160,3 +160,61 @@ tests:
       sloRequirement.maxReplicas: 5
     asserts:
       - failedTemplate: {errorPattern: minReplicas \(6\) is above maxReplicas \(5\)}
+
+  - it: an explicit publicBaseUrl wins over modelRoute.url
+    templates: [templates/server-deployment.yaml]
+    set:
+      serviceId: h3-test
+      server.config.publicBaseUrl: https://a.example.com/h3-test
+      modelRoute.url: https://b.example.com/h3-test
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_PUBLIC_BASE_URL, value: https://a.example.com/h3-test}
+
+  - it: modelRoute.url is the base when publicBaseUrl is empty
+    templates: [templates/server-deployment.yaml]
+    set:
+      serviceId: h3-test
+      modelRoute.url: https://b.example.com/h3-test
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_PUBLIC_BASE_URL, value: https://b.example.com/h3-test}
+
+  - it: neither leaves H3_PUBLIC_BASE_URL unset
+    templates: [templates/server-deployment.yaml]
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_PUBLIC_BASE_URL}
+          any: true
+
+  - it: a modelRoute.url that does not end in the route fails
+    templates: [templates/server-deployment.yaml]
+    set:
+      serviceId: h3-test
+      modelRoute.url: https://b.example.com/minimax-h3
+    asserts:
+      - failedTemplate: {errorPattern: must end in /h3-test}
+
+  - it: the default JobSLORequirement is exactly the off state (no maximumDeployment)
+    templates: [templates/autoscaling.yaml]
+    set:
+      sloRequirement.enabled: true
+    documentSelector: {path: metadata.name, value: h3-minimax-h3-server-ref2va}
+    asserts:
+      - isKind: {of: JobSLORequirement}
+      - equal: {path: apiVersion, value: inference.modelsphere.dev/v1alpha1}
+      - equal:
+          path: spec
+          value:
+            serviceId: h3-minimax-h3-server-ref2va
+            priority: 10
+            minimumDeployment: {type: replica, value: 1}
+            queue:
+              maxDepth: 2
+              promql: sum(max by(status)(h3_queue_tasks{namespace="minimax-h3", service="h3-minimax-h3-server-ref2va", capability="ref2va", status=~"queued|running"})) or vector(0)

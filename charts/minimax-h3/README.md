@@ -442,6 +442,7 @@ The chart accepts the values a generic catalog deploy service such as
 | `model.gpus` | GPUs per pool Pod (string or int) unless the pool sets `sglang.gpuCount`; must equal `tpSize × ulyssesDegree` or the render fails |
 | `model.gpuResource` | GPU resource name, default `nvidia.com/gpu` |
 | `schedulerName`, `priorityClassName`, `affinity` | Pool Pods, when `sglang.*` / `pools.<pool>.sglang.*` leave them unset. A pool-level `sglang.affinity` replaces `affinity` entirely; `sglang.gpuProduct` is ANDed into each of its required node selector terms |
+| `modelRoute.url` | Public base URL when `server.config.publicBaseUrl` is empty |
 | `modelRoute.nginx.{service,outputConfigMap,selector,route}` | The ModelRoute; the older `modelRoute.openrestyService` / `modelRoute.outputConfigMap` are read when these are empty |
 | `scaler.*`, `sloRequirement.*` | See [Autoscaling](#autoscaling) |
 | `model.name`, `cart.*`, `cache.*`, `image.*`, `modelRoute.monitor.*` | Accepted and ignored (H3 has no CART tier or cache, and its images are `server.image` / `router.image` / `sglang.image`) |
@@ -449,7 +450,10 @@ The chart accepts the values a generic catalog deploy service such as
 Pool Pods carry `app: <release>-minimax-h3` (Pod template only; the Deployment selectors are
 unchanged, they are immutable). The route name resolves `modelRoute.nginx.route` → `serviceId`
 → `modelRoute.route`; `server.config.publicBaseUrl`, when set, must end in `/<route>`, and
-`__ROUTE__` in it is replaced by the route name.
+`__ROUTE__` in it is replaced by the route name. When `publicBaseUrl` is empty,
+`modelRoute.url` (the release's public URL through the gateway, `<gateway>/<route>`, written by
+swiss for video engines) is used instead, under the same check; with neither, H3 infers the base
+from the request headers.
 
 ## Autoscaling
 

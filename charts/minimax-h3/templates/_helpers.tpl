@@ -188,7 +188,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- $base := trimSuffix "/" (include "minimax-h3.publicBaseUrl" .) -}}
 {{- if and $base (not (hasSuffix (printf "/%s" $route) $base)) -}}
-{{- fail (printf "server.config.publicBaseUrl %q must end in /%s, the route name: openresty strips that prefix and H3 adds it back to download URLs from this base. Use __ROUTE__ in the value to follow the route" $base $route) -}}
+{{- fail (printf "public base URL %q (server.config.publicBaseUrl, else modelRoute.url) must end in /%s, the route name: openresty strips that prefix and H3 adds it back to download URLs from this base. Use __ROUTE__ in publicBaseUrl to follow the route" $base $route) -}}
 {{- end -}}
 {{- end -}}
 {{- if and (not .Values.sglang.enabled) (not .Values.server.externalSglangUrl) -}}
@@ -285,9 +285,19 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- coalesce (default (dict) $mr.nginx).route .Values.serviceId $mr.route "" -}}
 {{- end -}}
 
-{{/* server.config.publicBaseUrl with __ROUTE__ replaced by the route name. */}}
+{{/*
+  Base of the download URLs H3 hands out: server.config.publicBaseUrl (with
+  __ROUTE__ replaced by the route name) > modelRoute.url (the release's public
+  URL through the gateway, as a deploy service writes it) > empty, where H3
+  infers the base from the request headers.
+*/}}
 {{- define "minimax-h3.publicBaseUrl" -}}
-{{- (.Values.server.config.publicBaseUrl | default "") | replace "__ROUTE__" (include "minimax-h3.route" .) -}}
+{{- $explicit := .Values.server.config.publicBaseUrl | default "" -}}
+{{- if $explicit -}}
+{{- $explicit | replace "__ROUTE__" (include "minimax-h3.route" .) -}}
+{{- else -}}
+{{- (default (dict) .Values.modelRoute).url | default "" -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Reject legacy overrides rather than silently detaching LoRA from sampling. */}}
