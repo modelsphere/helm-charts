@@ -2,3 +2,5 @@
 .git/
 .gitignore
 *.tmproj
+# helm-unittest suites, not part of the packaged chart
+tests/

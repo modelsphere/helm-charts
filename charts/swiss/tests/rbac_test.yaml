@@ -1,0 +1,65 @@
+# The deploy grant must cover every kind the engine charts swissd installs
+# render (sglang, vllm, minimax-h3): helm runs under swissd's ServiceAccount,
+# so a missing kind fails the install of any chart rendering it.
+suite: deploy RBAC covers the engine charts
+release:
+  name: swissd
+  namespace: swiss-system
+templates:
+  - templates/rbac.yaml
+tests:
+  - it: namespaced scope grants JobSLORequirements and PVCs in each listed namespace
+    set:
+      rbac.namespaces: [models]
+    # The releases Role: the only one whose second rule starts with secrets.
+    documentSelector: {path: "rules[1].resources[0]", value: secrets}
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [inference.x-k8s.io, inference.modelsphere.dev]
+            resources: [llmslorequirements, jobslorequirements]
+            verbs: [get, list, watch, create, update, patch, delete]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [secrets, configmaps, services, serviceaccounts, persistentvolumeclaims]
+            verbs: [get, list, watch, create, update, patch, delete]
+
+  - it: cluster scope grants the same
+    set:
+      rbac.scope: cluster
+    documentSelector: {path: "rules[1].resources[0]", value: secrets}
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [inference.x-k8s.io, inference.modelsphere.dev]
+            resources: [llmslorequirements, jobslorequirements]
+            verbs: [get, list, watch, create, update, patch, delete]
+
+  - it: lookupSecrets grants get on the named Secrets only, one Role per namespace
+    set:
+      rbac.namespaces: [models]
+      rbac.lookupSecrets:
+        - {namespace: middleware, name: cnpg-rw}
+        - {namespace: middleware, name: other}
+    documentSelector: {path: "rules[0].resourceNames[0]", value: cnpg-rw}
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [secrets]
+              resourceNames: [cnpg-rw, other]
+              verbs: [get]
+      - equal: {path: metadata.namespace, value: middleware}
+      - equal: {path: "subjects[0].name", value: swissd}
+        documentSelector: {path: roleRef.name, value: swissd-lookup}
+
+  - it: "no lookupSecrets, no lookup Role (nodes, namespaces, profile, releases: 2 objects each)"
+    set:
+      rbac.namespaces: [models]
+    asserts:
+      - hasDocuments: {count: 8}
