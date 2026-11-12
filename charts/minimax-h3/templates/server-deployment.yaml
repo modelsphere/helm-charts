@@ -93,7 +93,8 @@ metadata:
     app.kubernetes.io/component: server
     minimax-h3/pool: {{ $poolName }}
 spec:
-  {{- if not $root.Values.scaler.enabled }}
+  {{- $scaler := default (dict) $root.Values.scaler }}
+  {{- if not $scaler.enabled }}
   {{- /* hasKey, not default: replicaCount: 0 parks a pool and must stay 0. */}}
   replicas: {{ if hasKey $pool "replicaCount" }}{{ $pool.replicaCount }}{{ else }}1{{ end }}
   {{- else }}
@@ -113,7 +114,7 @@ spec:
   {{- if and $live $live.spec (hasKey $live.spec "replicas") }}
   replicas: {{ $live.spec.replicas }}
   {{- else }}
-  replicas: {{ ternary $ps.minReplicas $root.Values.scaler.minReplicas (hasKey $ps "minReplicas") | int }}
+  replicas: {{ ternary $ps.minReplicas $scaler.minReplicas (hasKey $ps "minReplicas") | int }}
   {{- end }}
   {{- end }}
   {{/*

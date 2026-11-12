@@ -47,10 +47,40 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $sec := lookup "v1" "Secret" $f.namespace $f.name -}}
 {{- if and $sec $sec.data (hasKey $sec.data $f.passwordKey) -}}
 {{- $host := $f.host | default (printf "%s.%s.svc.cluster.local" $f.name $f.namespace) -}}
-{{- printf "postgresql://%s:%s@%s:%v/%s" $f.user (index $sec.data $f.passwordKey | b64dec) $host $f.port $f.database -}}
+{{- /* Escaped: a generated password may hold @ : / # %, which would otherwise split the URL. */ -}}
+{{- $user := urlquery $f.user | replace "+" "%20" -}}
+{{- $pass := urlquery (index $sec.data $f.passwordKey | b64dec) | replace "+" "%20" -}}
+{{- printf "postgresql://%s:%s@%s:%v/%s" $user $pass $host $f.port (include "minimax-h3.databaseName" .) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+  The database the DSN built from fromSecret names: fromSecret.database when set,
+  else this release's own, h3_<namespace>_<release> (lowercase, [a-z0-9_], at
+  most 63 bytes, PostgreSQL's identifier limit; a longer one is cut and given a
+  hash of the whole).
+*/}}
+{{- define "minimax-h3.databaseName" -}}
+{{- $f := .Values.database.fromSecret -}}
+{{- if $f.database -}}
+{{- $f.database -}}
+{{- else -}}
+{{- $n := regexReplaceAll "[^a-z0-9_]" (printf "h3_%s_%s" .Release.Namespace .Release.Name | lower) "_" -}}
+{{- /* Cut to fit, with a hash of the whole name, so two long names that share a prefix stay apart. */ -}}
+{{- if gt (len $n) 63 -}}{{- $n = printf "%s_%s" (trunc 54 $n) (sha256sum $n | trunc 8) -}}{{- end -}}
+{{- $n -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+  Whether to render the CloudNativePG Database: the DSN is built from fromSecret
+  (no url, no existing Secret), for the per-release name, with createDatabase on.
+*/}}
+{{- define "minimax-h3.createDatabase" -}}
+{{- $f := .Values.database.fromSecret -}}
+{{- if and .Values.database.create (not .Values.database.url) $f.name $f.namespace (not $f.database) $f.createDatabase -}}true{{- end -}}
 {{- end -}}
 
 {{- define "minimax-h3.suffixed" -}}
@@ -190,7 +220,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
        the operator's own statement -- a dedicated domain (https://h3.example.com)
        in front of the gateway is legitimate -- so it is taken as given. */}}
 {{- if not .Values.server.config.publicBaseUrl -}}
-{{- $base := trimSuffix "/" (include "minimax-h3.publicBaseUrl" .) -}}
+{{- $base := include "minimax-h3.publicBaseUrl" . -}}
 {{- if and $base (not (hasSuffix (printf "/%s" $route) $base)) -}}
 {{- fail (printf "modelRoute.url %q must end in /%s, the route name: openresty strips that prefix and H3 adds it back to download URLs from this base. Fix modelRoute.url, or set server.config.publicBaseUrl explicitly" $base $route) -}}
 {{- end -}}
@@ -301,11 +331,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
   infers the base from the request headers.
 */}}
 {{- define "minimax-h3.publicBaseUrl" -}}
+{{- /* No trailing slash: H3 appends /v2/... to it, and a doubled slash misses the route. */ -}}
 {{- $explicit := .Values.server.config.publicBaseUrl | default "" -}}
 {{- if $explicit -}}
-{{- $explicit | replace "__ROUTE__" (include "minimax-h3.route" .) -}}
+{{- $explicit | replace "__ROUTE__" (include "minimax-h3.route" .) | trimSuffix "/" -}}
 {{- else -}}
-{{- (default (dict) .Values.modelRoute).url | default "" -}}
+{{- (default (dict) .Values.modelRoute).url | default "" | trimSuffix "/" -}}
 {{- end -}}
 {{- end -}}
 

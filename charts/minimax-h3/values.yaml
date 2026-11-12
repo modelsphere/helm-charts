@@ -60,17 +60,21 @@ database:
   existingSecret: ""
   existingSecretKey: url
   # Default: the shared CloudNativePG cluster the modelsphere installer creates
-  # (middleware/cloudnative-pg). Its bootstrap creates database minimaxh3 owned
-  # by h3 and keeps the password in Secret cnpg-rw, named after the read-write
-  # Service on purpose so one name serves as both. Set namespace or name to ""
-  # to turn the lookup off.
+  # (middleware/cnpg). Its bootstrap creates role h3 and keeps the password in
+  # Secret cnpg-rw, named after the read-write Service on purpose so one name
+  # serves as both. Set namespace or name to "" to turn the lookup off.
   #
   # lookup needs a live cluster: plain `helm template`, and helm-diff without
   # --dry-run=server, see nothing -- give database.url or existingSecret there.
   #
   # Two releases must not share one database: workers claim any queued task of
-  # their capability, so they would run each other's tasks. A second release
-  # sets its own database/user (or url).
+  # their capability, so they would run each other's tasks. So by default each
+  # release gets a database of its own on that cluster: database empty names it
+  # h3_<namespace>_<release>, and createDatabase renders a CloudNativePG Database
+  # in fromSecret.namespace that creates it, owned by user. Its reclaim policy is
+  # retain: uninstalling the release removes the Database object and keeps the
+  # data. Naming a database (such as the bootstrap's minimaxh3) uses that one
+  # as it is and creates nothing; the operator then answers for sharing it.
   fromSecret:
     namespace: middleware
     name: cnpg-rw
@@ -78,8 +82,14 @@ database:
     host: ""
     passwordKey: password
     user: h3
-    database: minimaxh3
+    # Empty: h3_<namespace>_<release>, created by the Database below.
+    database: ""
     port: 5432
+    # Render the CloudNativePG Database for the per-release name. Off: the
+    # database must already exist.
+    createDatabase: true
+    # The CloudNativePG Cluster (in fromSecret.namespace) the Database is created on.
+    cluster: cnpg
 
 # 两个能力池:各自的模型、并行度、副本数。任务表按 required_capability 分流,共库不串。
 pools:
@@ -92,8 +102,7 @@ pools:
     modelSubdir: FL2VA
     # Per-pool autoscaling knobs; see scaler / sloRequirement below.
     scaler: {}
-    sloRequirement:
-      queue: {maxDepth: 5}
+    sloRequirement: {}
     sglang:
       # model.hostPath: <explicit host path, wins over model.localPath>
       # tp4 对齐 ref2va:把权重(含 24GB adaln_proj)摊到 4 卡,每卡基线从 ~65GB 降到 ~48GB,
@@ -105,8 +114,7 @@ pools:
     replicaCount: 1
     modelSubdir: Ref2VA
     scaler: {}
-    sloRequirement:
-      queue: {maxDepth: 2}
+    sloRequirement: {}
     # 单个开关同时控制 LoRA 参数、挂载和 Server 采样;关闭即恢复基座请求。
     turbo:
       enabled: true
@@ -387,9 +395,13 @@ modelRoute:
 # Custom provider: the replica count comes from a decision server, which reads
 # each pool's JobSLORequirement (below). Needs the llm-scale operator.
 #
-# While enabled, the pool Deployments carry no spec.replicas: the operator owns
-# that field, and a chart value would fight it on every upgrade
-# (pools.<pool>.replicaCount is then ignored).
+# While enabled, the operator owns the replica count and pools.<pool>.replicaCount
+# is ignored. The pool Deployments still carry spec.replicas: the live count,
+# read with lookup, so an upgrade leaves it as the operator set it (dropping the
+# field would default it to 1 and kill Pods mid-task); before a Deployment exists,
+# minReplicas. lookup is empty under plain `helm template` or a GitOps render,
+# which therefore writes minReplicas: render those with the scaler off, or set
+# the counts yourself.
 #
 # Each pool may override minReplicas / maxReplicas under pools.<pool>.scaler.
 scaler:
@@ -416,8 +428,7 @@ scaler:
 # what the decision server scales the pool's LLMScaler by. serviceId is the
 # pool's Deployment name.
 #
-# Every key here can be overridden per pool under pools.<pool>.sloRequirement
-# (the pools ship queue.maxDepth 5 for fl2va and 2 for ref2va).
+# Every key here can be overridden per pool under pools.<pool>.sloRequirement.
 #
 # maxReplicas empty (the default) renders no maximumDeployment, which the
 # decision server treats as an unmanaged service: enabled + maxReplicas empty =
@@ -429,12 +440,19 @@ sloRequirement:
   minReplicas: 1
   maxReplicas: null
   queue:
-    maxDepth: 5
+    # Queued and running tasks per replica before the pool gets another one.
+    # Empty: 5 for fl2va and 2 for ref2va (a Ref2VA task runs longer). A value
+    # here applies to both pools; pools.<pool>.sloRequirement.queue.maxDepth wins.
+    maxDepth: null
     # Backlog of this pool. __SCOPE__ expands to
     # namespace="<ns>", service="<pool Deployment name>", capability="<pool>",
     # so two releases in one Prometheus never read each other's queue (service
     # is the headless Service name, which equals the Deployment name). max by
     # (status) folds the per-replica copies of one cluster-wide count.
+    # It reads the pool's own Pods, which export only their own capability, so
+    # the render fails with it when serviceMonitor is off (it would read 0) and
+    # when a scaled pool has minReplicas 0 (at 0 replicas nothing reports the
+    # backlog that should scale it back up). A promql of your own lifts both.
     promql: 'sum(max by(status)(h3_queue_tasks{__SCOPE__, status=~"queued|running"})) or vector(0)'
   annotations: {}
 

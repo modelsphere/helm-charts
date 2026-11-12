@@ -134,13 +134,13 @@ tests:
       - equal: {path: spec.queue.maxDepth, value: 2}
         documentSelector: {path: metadata.name, value: h3-minimax-h3-server-ref2va}
 
-  - it: max set turns scaling on; pool keys win, min 0 included
+  - it: max set turns scaling on; pool keys win, min 0 included (with a query of its own)
     templates: [templates/autoscaling.yaml]
     set:
       sloRequirement.enabled: true
       sloRequirement.maxReplicas: 5
       sloRequirement.minReplicas: 2
-      pools.ref2va.sloRequirement: {minReplicas: 0, maxReplicas: 3, priority: 20, queue: {maxDepth: 1}}
+      pools.ref2va.sloRequirement: {minReplicas: 0, maxReplicas: 3, priority: 20, queue: {maxDepth: 1, promql: "sum(router_queue{capability=\"ref2va\"}) or vector(0)"}}
     asserts:
       - equal: {path: spec.maximumDeployment, value: {type: replica, value: 5}}
         documentSelector: {path: metadata.name, value: h3-minimax-h3-server-fl2va}

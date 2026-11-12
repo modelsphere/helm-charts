@@ -57,8 +57,15 @@ client ──► Router (Deployment, stateless, optional)
   shrinks to one FL2VA replica on upgrade. Set `replicaCount` explicitly to keep the old size.
 - The per-pool model paths are no longer defaults in `values.yaml`. Without `model.localPath`
   they resolve to the same `/data/models/...` paths as before, and explicit `hostPath` values win.
-- `database.fromSecret` now defaults to the modelsphere CNPG cluster. See [Database](#database),
-  and the warning there about sharing one database.
+- `database.fromSecret` now defaults to the modelsphere CNPG cluster, with a database of the
+  release's own that the chart creates there. See [Database](#database). A release that gives
+  `database.url` or `database.existingSecret` is unaffected. A release that already ran on the
+  shared `minimaxh3` database (a 0.3 prerelease default) sets
+  `database.fromSecret.database: minimaxh3` to stay on it and keep its tasks.
+- `helm upgrade --reuse-values` from 0.2 renders: it carries the 0.2 chart's values, which have
+  none of the new maps, and those read as off (no scaler, no SLO requirement).
+- `sloRequirement.queue.maxDepth` now applies to both pools when set; unset, the pools keep 5
+  (FL2VA) and 2 (Ref2VA).
 
 ## Install
 
@@ -418,16 +425,42 @@ not serve the CRD.
 ## Database
 
 With no `database.*` values the chart connects to the CloudNativePG cluster from the
-modelsphere installer (`middleware/cloudnative-pg` there): its bootstrap creates database
-`minimaxh3` owned by `h3` and keeps the password in Secret `middleware/cnpg-rw`, named after
-the read-write Service on purpose. The chart `lookup`s that Secret and writes the DSN
-`postgresql://h3:<pw>@cnpg-rw.middleware.svc.cluster.local:5432/minimaxh3` into a Secret of its own.
+modelsphere installer (Cluster `middleware/cnpg`), whose bootstrap creates role `h3` and keeps
+its password in Secret `middleware/cnpg-rw`, named after the read-write Service on purpose. The
+chart `lookup`s that Secret and writes the DSN
+`postgresql://h3:<pw>@cnpg-rw.middleware.svc.cluster.local:5432/<database>` into a Secret of its
+own (user and password URL-escaped).
+
+**Each release gets a database of its own**: `h3_<namespace>_<release>` (lowercased, other
+characters as `_`; a name over 63 bytes is cut and given a hash of the whole). The chart renders a
+CloudNativePG `Database` in the Cluster's namespace that creates it, owned by `h3`:
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: <namespace>-<release>-h3
+  namespace: middleware
+spec:
+  cluster: {name: cnpg}
+  name: h3_<namespace>_<release>
+  owner: h3
+  ensure: present
+  databaseReclaimPolicy: retain
+```
+
+`retain`: uninstalling the release deletes the `Database` object and keeps the database and its
+data; drop it by hand when it is no longer wanted. The installing identity needs `get`, `create`
+and `patch` on `databases.postgresql.cnpg.io` in that namespace.
 
 | Value | Default | |
 | --- | --- | --- |
 | `database.fromSecret.namespace` / `.name` | `middleware` / `cnpg-rw` | Where the password is; set either to `""` to turn the lookup off |
+| `database.fromSecret.database` | `""` | Empty: the release's own, created as above. A name (such as the bootstrap's `minimaxh3`) is used as it is and nothing is created |
+| `database.fromSecret.createDatabase` | `true` | Off: the release's database must already exist |
+| `database.fromSecret.cluster` | `cnpg` | The CloudNativePG Cluster the `Database` is created on |
 | `database.fromSecret.host` | `""` | Empty: `<name>.<namespace>.svc.cluster.local` |
-| `database.fromSecret.user` / `.database` / `.port` / `.passwordKey` | `h3` / `minimaxh3` / `5432` / `password` | |
+| `database.fromSecret.user` / `.port` / `.passwordKey` | `h3` / `5432` / `password` | |
 | `database.url` | `""` | Wins over everything; required for plain `helm template` |
 | `database.existingSecret` (+ `create: false`) | `""` | A DSN Secret you manage |
 
@@ -436,11 +469,10 @@ the read-write Service on purpose. The chart `lookup`s that Secret and writes th
   `database.existingSecret` there.
 
 > [!WARNING]
-> **Two releases must not share a database.** The default points every release at the same
-> `minimaxh3` database. Workers claim any queued task of their capability, so two releases on
-> one database run, and fail, each other's tasks. A second release needs its own database:
-> create a user and database (the CNPG `Database` / role CRDs) and set
-> `database.fromSecret.{user,database}`, or give its own `database.url`.
+> **Two releases must not share a database.** Workers claim any queued task of their
+> capability, so two releases on one database run, and fail, each other's tasks. The default
+> keeps them apart; naming a database in `database.fromSecret.database` or `database.url` puts
+> that on you.
 
 ## Generic engine values (swiss)
 
@@ -479,7 +511,8 @@ Off by default. Per enabled pool, keyed by the pool's Deployment name
   still renders `spec.replicas`, as the **live** count of the existing Deployment (read with
   `lookup`), so an upgrade never resizes the pool: a dropped field would default to 1 and kill
   the extra Pods mid-task. Before the Deployment exists it starts at the scaler's `minReplicas`.
-  Plain `helm template` (no `lookup`) shows `minReplicas`.
+  Plain `helm template` and GitOps renders (no `lookup`) write `minReplicas`, and applying one
+  resizes a running pool to it: render those with the scaler off, or set the counts yourself.
 - `sloRequirement.enabled` renders a `JobSLORequirement` (`inference.modelsphere.dev/v1alpha1`)
   sizing the pool from its queue backlog.
 
@@ -491,7 +524,7 @@ Off by default. Per enabled pool, keyed by the pool's Deployment name
 | `sloRequirement.minReplicas` | `1` | `pools.<pool>.sloRequirement.minReplicas` | `minimumDeployment` |
 | `sloRequirement.maxReplicas` | empty | `pools.<pool>.sloRequirement.maxReplicas` | `maximumDeployment`; **empty = not scaled** |
 | `sloRequirement.priority` | `10` | `pools.<pool>.sloRequirement.priority` | |
-| `sloRequirement.queue.maxDepth` | — | `5` (fl2va), `2` (ref2va) | Backlog per replica |
+| `sloRequirement.queue.maxDepth` | empty: `5` (fl2va), `2` (ref2va) | `pools.<pool>.sloRequirement.queue.maxDepth` | Backlog per replica |
 | `sloRequirement.queue.promql` | backlog of this pool | `pools.<pool>.sloRequirement.queue.promql` | `__SCOPE__` → `namespace, service, capability` of this pool |
 
 **`sloRequirement.enabled` with `maxReplicas` empty renders the requirement without
@@ -504,6 +537,15 @@ read each other's queue:
 ```promql
 sum(max by(status)(h3_queue_tasks{namespace="<ns>", service="<release>-server-<pool>", capability="<pool>", status=~"queued|running"})) or vector(0)
 ```
+
+The default query reads the series the chart's ServiceMonitor scrapes off the pool's own Pods,
+and a pool's Pods export only their own capability's backlog. So the render fails when:
+
+- `sloRequirement.enabled` and `serviceMonitor.enabled: false`: the backlog would always read 0;
+- a scaled pool (maximum set) has `minReplicas: 0`: at 0 replicas no Pod is left to report the
+  backlog that should scale it back up.
+
+A `promql` of your own lifts both checks.
 
 Adopting hand-made objects of the same names: helm refuses to take over objects it did not
 create. Delete (or label/annotate for helm adoption) existing `LLMScaler` / `JobSLORequirement`
