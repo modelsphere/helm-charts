@@ -217,6 +217,22 @@
           "additionalProperties": false,
           "properties": {
             "replicas": { "type": "integer", "minimum": 1, "maximum": 2 },
+            "strategy": {
+              "description": "Rollout of the per-slice pd-ds router Deployment (<fullname>-router-sN). Deployment-shape, same as the top-level strategy field. Default is RollingUpdate with maxUnavailable 0 and maxSurge 1. Colocate has no router Deployment, so this does not apply there. type: Recreate drops rollingUpdate at render.",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "type": { "type": "string", "enum": ["RollingUpdate", "Recreate"] },
+                "rollingUpdate": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "maxSurge": { "$ref": "#/definitions/intOrPercent" },
+                    "maxUnavailable": { "$ref": "#/definitions/intOrPercent" }
+                  }
+                }
+              }
+            },
             "policy": { "type": "string", "minLength": 1 },
             "backend": {
               "description": "Which --kv-connector value the router sets, and whether the trailing mooncake bootstrap port is appended to each --prefill URL. Empty (default) means follow pd.transferBackend. Set explicitly only to deliberately mix engine and router connectors (e.g. an experimental engine backend that uses the nixl router pairing) -- the chart owner takes responsibility for the combination.",

@@ -147,6 +147,18 @@ metadata:
     app: {{ $root.Release.Name }}-sglang
 spec:
   replicas: {{ $pd.router.replicas | default 1 }}
+  {{- with $pd.router.strategy }}
+  strategy:
+    {{- /* rollingUpdate is only legal under type: RollingUpdate -- the API
+           server rejects a Deployment carrying both. Helm deep-merges values,
+           so someone setting nothing but `type: Recreate` still inherits the
+           default rollingUpdate block and would get that rejection. Drop it. */}}
+    {{- if eq (.type | default "RollingUpdate") "Recreate" }}
+    {{- toYaml (omit . "rollingUpdate") | nindent 4 }}
+    {{- else }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
   # Reuse the top-level value: the router pod's "no progress" window now has to
   # cover the engine placement window too, because its init container blocks
   # on the engines being scheduled. The default 7200 (hours) is the natural

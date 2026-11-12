@@ -157,3 +157,48 @@ tests:
       - equal:
           path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].image
           value: debian:12-slim
+
+  - it: pd-ds router keeps one pod up and surges one during a rollout
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - equal:
+          path: spec.strategy
+          value:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 0
+              maxSurge: 1
+
+  - it: pd-ds router strategy follows pd.router.strategy
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      pd.router.strategy.rollingUpdate.maxUnavailable: 1
+      pd.router.strategy.rollingUpdate.maxSurge: 2
+    asserts:
+      - equal:
+          path: spec.strategy
+          value:
+            type: RollingUpdate
+            rollingUpdate:
+              maxUnavailable: 1
+              maxSurge: 2
+
+  - it: pd-ds router Recreate drops the inherited rollingUpdate block
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      pd.router.strategy.type: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+      - isNull:
+          path: spec.strategy.rollingUpdate

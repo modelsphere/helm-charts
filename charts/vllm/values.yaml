@@ -298,6 +298,18 @@ pd:
     # merged pod; this replicas is the per-slice router Deployment count
     # (vllm-router has no in-image HA either -- keep it at 1).
     replicas: 1
+    # A/B only: rollout of the per-slice router Deployment
+    # (<fullname>-router-sN). Colocate has no separate router Deployment.
+    # Default keeps the current pod serving until the replacement is Ready
+    # (maxUnavailable: 0) and allows one extra pod during the swap
+    # (maxSurge: 1). The router holds no GPUs, so that extra pod is CPU
+    # only. type: Recreate drops rollingUpdate at render -- a Deployment
+    # that carries both is rejected by the API.
+    strategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 0
+        maxSurge: 1
     # Forwarded verbatim as --policy. The Rust vllm-router accepts
     # round_robin today; there is no cache_aware.
     policy: round_robin
