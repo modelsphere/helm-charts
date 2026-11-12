@@ -157,3 +157,25 @@ tests:
       - equal:
           path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].image
           value: debian:12-slim
+
+  # Engines healthy is not the router listening: the boot script blocks on
+  # every upstream's identity before it execs smg, so a scale-up with a
+  # still-loading engine went Ready on the old engines and the rollout deleted
+  # the working router. The router's own /health must be a probe target too.
+  - it: pd-ds router startup/readiness also probe the router's own /health
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      service.port: 18123
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.exec.command[2]
+          pattern: 'check "127\.0\.0\.1" "18123" \|\| '
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].startupProbe.exec.command[2]
+          pattern: 'check "127\.0\.0\.1" "18123" \|\| '
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: '127\.0\.0\.1'

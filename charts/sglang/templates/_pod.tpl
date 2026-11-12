@@ -1044,9 +1044,10 @@ tolerations:
   this router alive and taking HTTP", because during model load /health
   fails (the engines' own 90-min startup budget exists precisely because
   /health is unanswerable while loading), and after load it answers in
-  ~3ms. Probe the engines directly, never the router's own port: asking
-  the router cannot answer the question either -- a router holding a
-  dead upstream list keeps its port open just the same.
+  ~3ms. Probe the engines directly: asking the router cannot answer the
+  question -- a router holding a dead upstream list keeps its port open
+  just the same. The A/B caller adds the router itself as one more target,
+  so "engines up" alone does not count as "router up".
 
   Known gap this does not close: after engines are healthy, a wedged
   scheduler keeps serving /health 200 from cached frontend state, and

@@ -411,10 +411,15 @@ spec:
                and doubling it here would halve scheduler capacity for no
                signal. startupProbe carries the engines' 90-minute load
                budget so this pod isn't liveness-killed while engines load.
+               The "router" entry adds the router's own /health (smg answers
+               200 once listening): healthy engines alone go Ready while the
+               boot script still waits on a loading engine's identity, and a
+               rollout then deletes the old, working router.
                See sglang.pdRouterProbes. */ -}}
         {{- include "sglang.pdRouterProbes" (dict "roles" (dict
              "prefill" (dict "host" (printf "%s-prefill-hl-s%d.%s.svc.cluster.local." $fullname $s $root.Release.Namespace) "port" ($pd.prefill.httpPort | default 30001))
-             "decode"  (dict "host" (printf "%s-decode-hl-s%d.%s.svc.cluster.local."  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort  | default 30002)))) | nindent 8 }}
+             "decode"  (dict "host" (printf "%s-decode-hl-s%d.%s.svc.cluster.local."  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort  | default 30002))
+             "router"  (dict "host" "127.0.0.1" "port" $root.Values.service.port))) | nindent 8 }}
         {{- /* Drift liveness: restart the router if a new prefill/decode IP
                appears in DNS after boot -- argv is immutable and the running
                router can never learn about post-boot upstreams. */}}
