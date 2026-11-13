@@ -155,3 +155,32 @@ tests:
       - equal:
           path: spec.template.spec.initContainers[?(@.name == "wait-upstreams")].image
           value: debian:12-slim
+
+  # Engines healthy is not the router serving: the boot script blocks on every
+  # upstream's identity before it execs vllm-router, so a scale-up with a
+  # still-loading engine went Ready on the old engines and the rollout deleted
+  # the working router. The router's own /readiness gates startup/readiness;
+  # its /health would wait for EVERY worker. Liveness never sees the router.
+  - it: pd-ds router startup/readiness also probe the router's own /readiness
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      service.port: 18123
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.exec.command[2]
+          pattern: 'check "127\.0\.0\.1" "18123" "/readiness" \|\| '
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].startupProbe.exec.command[2]
+          pattern: 'check "127\.0\.0\.1" "18123" "/readiness" \|\| '
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.exec.command[2]
+          pattern: 'check "ci-prefill-hl-s0\.ci\.svc\.cluster\.local\." "8001" "/health" \|\| '
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: 'check "prefill" "ci-prefill-hl-s0\.ci\.svc\.cluster\.local\." prefill-ips "8001" "/health"'
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: '127\.0\.0\.1'

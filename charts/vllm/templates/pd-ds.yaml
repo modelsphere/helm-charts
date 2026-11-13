@@ -391,11 +391,15 @@ spec:
                  a router with an empty upstream list would still answer 200.
                  Per-role the headless FQDN resolves to every backing engine;
                  the script curls /health on whatever DNS returns and passes
-                 as soon as one engine answers per role. See
+                 as soon as one engine answers per role. The "router" entry adds
+                 the router's own /readiness (can it pick a prefill+decode pair;
+                 its /health wants EVERY worker healthy), so Ready waits for the
+                 router to serve. Liveness skips it. See
                  vllm.pdRouterProbes in _pod.tpl for the chain's rationale. */ -}}
         {{- $probeRoles := dict
-            "prefill" (dict "host" (printf "%s-prefill-hl-s%d.%s.svc.cluster.local." $fullname $s $root.Release.Namespace) "port" ($pd.prefill.httpPort | default 8001))
-            "decode"  (dict "host" (printf "%s-decode-hl-s%d.%s.svc.cluster.local."  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort | default 8002)) }}
+            "prefill" (dict "host" (printf "%s-prefill-hl-s%d.%s.svc.cluster.local." $fullname $s $root.Release.Namespace) "port" ($pd.prefill.httpPort | default 8001) "path" "/health")
+            "decode"  (dict "host" (printf "%s-decode-hl-s%d.%s.svc.cluster.local."  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort | default 8002) "path" "/health")
+            "router"  (dict "host" "127.0.0.1" "port" $root.Values.service.port "path" "/readiness") }}
         {{- include "vllm.pdRouterProbes" (dict "roles" $probeRoles) | nindent 8 }}
         {{- /* Drift liveness: restart the router if a new prefill/decode IP
                appears in DNS after boot -- argv is immutable and the running
