@@ -1036,7 +1036,7 @@ tolerations:
   eventually goes stale in the router's argv -- the staleness self-
   healing PR addresses that layer.
 
-  Caller passes a dict role -> {host, port}:
+  Caller passes a dict role -> {host, port, path}; path is required:
     A/B      the slice's per-role headless FQDN -- script resolves every
              A-record IP and passes on the first 200.
     colocate 127.0.0.1 -- literal, skips resolution.
@@ -1075,7 +1075,7 @@ readinessProbe:
 {{- $roles := .roles -}}
 set -u
 check() {
-  local src=$1 port=$2
+  local src=$1 port=$2 path=$3
   # A name (any non-numeric character in src) -> resolve via DNS and try each.
   # Dotted-quad literal -> probe directly, no resolution step. python3 +
   # urllib, never curl or wget: vllm/vllm-router ships neither (see the
@@ -1083,17 +1083,17 @@ check() {
   case "$src" in
     *[!0-9.]*)
       for ip in $(getent hosts "$src" | awk '{print $1}' | sort -u); do
-        python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port/health', timeout=5)" >/dev/null 2>&1 && return 0
+        python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port$path', timeout=5)" >/dev/null 2>&1 && return 0
       done
       return 1
       ;;
     *)
-      python3 -c "import urllib.request; urllib.request.urlopen('http://$src:$port/health', timeout=5)" >/dev/null 2>&1
+      python3 -c "import urllib.request; urllib.request.urlopen('http://$src:$port$path', timeout=5)" >/dev/null 2>&1
       ;;
   esac
 }
 {{- range $role, $target := $roles }}
-check {{ $target.host | quote }} {{ $target.port | quote }} || { echo "router not ready: role {{ $role }} has no reachable upstream" >&2; exit 1; }
+check {{ $target.host | quote }} {{ $target.port | quote }} {{ required (printf "pd router probe target %s needs a path" $role) $target.path | quote }} || { echo "router not ready: role {{ $role }} has no reachable upstream" >&2; exit 1; }
 {{- end }}
 exit 0
 {{- end -}}
@@ -1162,7 +1162,7 @@ except Exception:
 PY
 }
 check() {
-  local role=$1 svc=$2 file="/tmp/pd-router/$3" port=$4
+  local role=$1 svc=$2 file="/tmp/pd-router/$3" port=$4 path=$5
   [ -f "$file" ] || return 0
   local ip
   while read -r ip; do
@@ -1178,7 +1178,7 @@ check() {
       # per-upstream bootstrap handshake (vllm + mooncake), is actively
       # harmful -- the whole slice sits dark until the retry budget drains.
       # Short timeout so a slow engine never stalls the probe itself.
-      if python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port/health', timeout=2)" 2>/dev/null; then
+      if python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port$path', timeout=2)" 2>/dev/null; then
         echo "router stale: $role upstream $ip serving but not in argv" >&2
         rc=1
       fi
@@ -1208,7 +1208,7 @@ check() {
     live=$(live_id "$ip") || continue    # probe failed: skip-tick
     [ "$live" = '|' ] && continue        # live has no data; skip
     [ "$live" = "$want" ] && continue
-    if python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port/health', timeout=2)" 2>/dev/null; then
+    if python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port$path', timeout=2)" 2>/dev/null; then
       echo "router stale: $role upstream $ip identity changed ($want -> $live) while serving" >&2
       rc=1
     fi
@@ -1220,7 +1220,9 @@ check() {
   # inflicted DoS the chart could ship.
 }
 {{- range $role, $target := $roles }}
-check {{ $role | quote }} {{ $target.host | quote }} {{ $role }}-ips {{ $target.port | quote }}
+{{- if ne $role "router" }}{{/* the router itself, not an upstream: nothing to drift-check */}}
+check {{ $role | quote }} {{ $target.host | quote }} {{ $role }}-ips {{ $target.port | quote }} {{ required (printf "pd router liveness target %s needs a path" $role) $target.path | quote }}
+{{- end }}
 {{- end }}
 exit $rc
 {{- end -}}

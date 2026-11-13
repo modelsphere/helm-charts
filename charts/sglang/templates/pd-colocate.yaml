@@ -134,8 +134,8 @@ spec:
                router is running -- the Service's front door opens then,
                not earlier. See sglang.pdRouterProbes. */ -}}
         {{- include "sglang.pdRouterProbes" (dict "roles" (dict
-             "prefill" (dict "host" "127.0.0.1" "port" ($pd.prefill.httpPort | default 30001))
-             "decode"  (dict "host" "127.0.0.1" "port" ($pd.decode.httpPort  | default 30002)))) | nindent 8 }}
+             "prefill" (dict "host" "127.0.0.1" "port" ($pd.prefill.httpPort | default 30001) "path" "/health")
+             "decode"  (dict "host" "127.0.0.1" "port" ($pd.decode.httpPort  | default 30002) "path" "/health"))) | nindent 8 }}
         # Port name is router-http, NOT http: the prefill engine in this same
         # pod already names its port http-prefill (and decode http-decode), and
         # the API server warns on a duplicate name within one pod. The front-door Service

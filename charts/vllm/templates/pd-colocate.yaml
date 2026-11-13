@@ -148,8 +148,8 @@ spec:
                  both engines share this netns, so 127.0.0.1 is the only
                  host the script needs. Includes the engine load budget. */ -}}
         {{- $probeRoles := dict
-            "prefill" (dict "host" "127.0.0.1" "port" ($pd.prefill.httpPort | default 8001))
-            "decode"  (dict "host" "127.0.0.1" "port" ($pd.decode.httpPort | default 8002)) }}
+            "prefill" (dict "host" "127.0.0.1" "port" ($pd.prefill.httpPort | default 8001) "path" "/health")
+            "decode"  (dict "host" "127.0.0.1" "port" ($pd.decode.httpPort | default 8002) "path" "/health") }}
         {{- include "vllm.pdRouterProbes" (dict "roles" $probeRoles) | nindent 8 }}
         {{- with $root.Values.env }}
         env:
