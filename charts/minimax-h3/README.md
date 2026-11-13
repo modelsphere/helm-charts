@@ -36,18 +36,36 @@ client ──► Router (Deployment, stateless, optional)
 - **The Router is optional.** With `router.enabled: false`, the shared `<release>-server-api`
   Service serves directly (query, delete, download and dashboard work through any Server);
   only one pool may be enabled in that shape.
-- **PostgreSQL is external.** Point `database.url` at it, or let the chart read the password
-  from the PostgreSQL chart's Secret (`database.fromSecret`). Secrets cannot be referenced
-  across namespaces, so the chart writes a DSN-only Secret in its own namespace.
+- **PostgreSQL is external.** By default the chart reads the password of the shared
+  CloudNativePG cluster that the [modelsphere](https://github.com/modelsphere/modelsphere)
+  installer creates (`middleware/cnpg-rw`, database `minimaxh3`, user `h3`; see
+  [Database](#database)). Or point `database.url` at any PostgreSQL. Secrets cannot be
+  referenced across namespaces, so the chart writes a DSN-only Secret in its own namespace.
 
 ## Prerequisites
 
 | Dependency | Notes |
 | --- | --- |
-| PostgreSQL | Any reachable instance with a database for H3 (the examples use `minimaxh3`) |
+| PostgreSQL | The modelsphere installer's CloudNativePG cluster (zero-config default), or any reachable instance with a database for H3 |
 | RWX StorageClass | CephFS, NFS or similar; `sharedStorage.storageClass` empty uses the cluster default |
 | GPUs | 4 per SGLang replica (`nvidia.com/gpu: 4`), NVIDIA device plugin or GPU Operator |
-| Weights | hostPath `/data/models/MiniMax-H3/{FL2VA,Ref2VA}` by default, **synced to the GPU nodes first**; a PVC works too |
+| Weights | hostPath `<model.localPath>/{FL2VA,Ref2VA,Turbo}`, or `/data/models/MiniMax-H3/{FL2VA,Ref2VA}` + `/data/models/Minimax-h3-Turbo` without `model.localPath`, **synced to the GPU nodes first**; a PVC works too |
+
+## Upgrading to 0.3
+
+- **`pools.fl2va.replicaCount` now defaults to 1 (was 2).** A release that relied on the default
+  shrinks to one FL2VA replica on upgrade. Set `replicaCount` explicitly to keep the old size.
+- The per-pool model paths are no longer defaults in `values.yaml`. Without `model.localPath`
+  they resolve to the same `/data/models/...` paths as before, and explicit `hostPath` values win.
+- `database.fromSecret` now defaults to the modelsphere CNPG cluster, with a database of the
+  release's own that the chart creates there. See [Database](#database). A release that gives
+  `database.url` or `database.existingSecret` is unaffected. A release that already ran on the
+  shared `minimaxh3` database (a 0.3 prerelease default) sets
+  `database.fromSecret.database: minimaxh3` to stay on it and keep its tasks.
+- `helm upgrade --reuse-values` from 0.2 renders: it carries the 0.2 chart's values, which have
+  none of the new maps, and those read as off (no scaler, no SLO requirement).
+- `sloRequirement.queue.maxDepth` now applies to both pools when set; unset, the pools keep 5
+  (FL2VA) and 2 (Ref2VA).
 
 ## Install
 
@@ -63,17 +81,15 @@ database:
   url: postgresql://h3:<password>@postgresql.db.svc.cluster.local:5432/minimaxh3
 sharedStorage:
   storageClass: cephfs
+model:
+  localPath: /srv/models/MiniMax-H3   # FL2VA/, Ref2VA/ and Turbo/ underneath
 pools:                        # both pools are on by default; disable one you do not need
   fl2va:
-    replicaCount: 2
-    sglang:
-      model: {hostPath: /srv/models/MiniMax-H3/FL2VA}
+    replicaCount: 2           # default 1
   ref2va:
     replicaCount: 1
-    sglang:
-      model: {hostPath: /srv/models/MiniMax-H3/Ref2VA}
-    turbo:
-      lora: {hostPath: /srv/models/Minimax-h3-Turbo}
+    # an explicit path still wins over model.localPath:
+    # turbo: {lora: {hostPath: /srv/models/Minimax-h3-Turbo}}
 router:
   service:
     type: NodePort            # direct access for testing; keep ClusterIP behind a gateway
@@ -384,9 +400,10 @@ and the service is reachable at `https://<host>/<modelRoute.route>/v2/...`:
 ```yaml
 modelRoute:
   enabled: true
-  route: minimax-h3
-  openrestyService: <ns>/openresty
-  outputConfigMap: <ns>/openresty-conf
+  route: minimax-h3            # or serviceId / nginx.route, see "Generic engine values"
+  nginx:
+    service: <ns>/openresty
+    outputConfigMap: <ns>/openresty-conf
 server:
   config:
     publicBaseUrl: https://<host>/minimax-h3   # openresty strips /<route>/; H3 adds it back to download URLs
@@ -399,18 +416,147 @@ not serve the CRD.
 
 | Value | Default | Notes |
 | --- | --- | --- |
-| `modelRoute.route` | `minimax-h3` | External path prefix. Change the tail of `server.config.publicBaseUrl` with it, or download links break |
+| `modelRoute.route` | `minimax-h3` | External path prefix when neither `modelRoute.nginx.route` nor `serviceId` is set. The tail of `server.config.publicBaseUrl` must match the resolved route (the render checks) |
 | `modelRoute.values.rate_limit` | `200Mbps` | **Total** download bandwidth across all download connections. openresty is shared with other models, and a few concurrent video downloads can fill the NIC |
 | `modelRoute.values.download_conn_limit` | `"20"` | Concurrent downloads across all clients; `rate_limit` is split evenly between them. Quote it: the CRD map is string-typed |
 | `modelRoute.values.max_body_size` | `64m` | Request body limit |
 | `modelRoute.values.auth` | on | Bearer API keys from openresty's key file; `auth: "false"` turns it off. `auth_public_paths` defaults to the download path, since `content.url` is handed to end users |
+
+## Database
+
+With no `database.*` values the chart connects to the CloudNativePG cluster from the
+modelsphere installer (Cluster `middleware/cnpg`), whose bootstrap creates role `h3` and keeps
+its password in Secret `middleware/cnpg-rw`, named after the read-write Service on purpose. The
+chart `lookup`s that Secret and writes the DSN
+`postgresql://h3:<pw>@cnpg-rw.middleware.svc.cluster.local:5432/<database>` into a Secret of its
+own (user and password URL-escaped).
+
+**Each release gets a database of its own**: `h3_<namespace>_<release>` (lowercased, other
+characters as `_`; a name over 63 bytes is cut and given a hash of the whole). The chart renders a
+CloudNativePG `Database` in the Cluster's namespace that creates it, owned by `h3`:
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: <namespace>-<release>-h3
+  namespace: middleware
+spec:
+  cluster: {name: cnpg}
+  name: h3_<namespace>_<release>
+  owner: h3
+  ensure: present
+  databaseReclaimPolicy: retain
+```
+
+`retain`: uninstalling the release deletes the `Database` object and keeps the database and its
+data; drop it by hand when it is no longer wanted. The installing identity needs `get`, `create`
+and `patch` on `databases.postgresql.cnpg.io` in that namespace.
+
+| Value | Default | |
+| --- | --- | --- |
+| `database.fromSecret.namespace` / `.name` | `middleware` / `cnpg-rw` | Where the password is; set either to `""` to turn the lookup off |
+| `database.fromSecret.database` | `""` | Empty: the release's own, created as above. A name (such as the bootstrap's `minimaxh3`) is used as it is and nothing is created |
+| `database.fromSecret.createDatabase` | `true` | Off: the release's database must already exist |
+| `database.fromSecret.cluster` | `cnpg` | The CloudNativePG Cluster the `Database` is created on |
+| `database.fromSecret.host` | `""` | Empty: `<name>.<namespace>.svc.cluster.local` |
+| `database.fromSecret.user` / `.port` / `.passwordKey` | `h3` / `5432` / `password` | |
+| `database.url` | `""` | Wins over everything; required for plain `helm template` |
+| `database.existingSecret` (+ `create: false`) | `""` | A DSN Secret you manage |
+
+- `lookup` needs a live cluster. Plain `helm template`, and helm-diff without
+  `--dry-run=server`, see nothing and the render fails: pass `database.url` or
+  `database.existingSecret` there.
+
+> [!WARNING]
+> **Two releases must not share a database.** Workers claim any queued task of their
+> capability, so two releases on one database run, and fail, each other's tasks. The default
+> keeps them apart; naming a database in `database.fromSecret.database` or `database.url` puts
+> that on you.
+
+## Generic engine values (swiss)
+
+The chart accepts the values a generic catalog deploy service such as
+[swiss](https://github.com/modelsphere/swiss) writes, next to its own:
+
+| Value | Effect |
+| --- | --- |
+| `serviceId` | Route name (unless `modelRoute.nginx.route` is set) |
+| `model.localPath` | Weights at `<localPath>/<pools.<pool>.modelSubdir>` (`FL2VA`, `Ref2VA`) and the Turbo LoRA at `<localPath>/<pools.ref2va.turbo.lora.subdir>` (`Turbo`). An explicit `pools.<pool>.sglang.model.hostPath` / `pools.ref2va.turbo.lora.hostPath` wins |
+| `model.gpus` | GPUs per pool Pod (string or int) unless the pool sets `sglang.gpuCount`; must equal `tpSize × ulyssesDegree` or the render fails |
+| `model.gpuResource` | GPU resource name, default `nvidia.com/gpu` |
+| `schedulerName`, `priorityClassName`, `affinity` | Pool Pods, when `sglang.*` / `pools.<pool>.sglang.*` leave them unset. A pool-level `sglang.affinity` replaces `affinity` entirely; `sglang.gpuProduct` is ANDed into each of its required node selector terms |
+| `modelRoute.url` | Public base URL when `server.config.publicBaseUrl` is empty |
+| `modelRoute.nginx.{service,outputConfigMap,selector,route}` | The ModelRoute; the older `modelRoute.openrestyService` / `modelRoute.outputConfigMap` are read when these are empty |
+| `scaler.*`, `sloRequirement.*` | See [Autoscaling](#autoscaling) |
+| `model.name`, `cart.*`, `cache.*`, `image.*`, `modelRoute.monitor.*` | Accepted and ignored (H3 has no CART tier or cache, and its images are `server.image` / `router.image` / `sglang.image`) |
+
+Pool Pods carry `app: <release>-minimax-h3` (Pod template only; the Deployment selectors are
+unchanged, they are immutable). The route name resolves `modelRoute.nginx.route` → `serviceId`
+→ `modelRoute.route`. An explicit `server.config.publicBaseUrl` is used as given (a dedicated
+domain is fine), with `__ROUTE__` in it replaced by the route name. When it is empty,
+`modelRoute.url` (the release's public URL through the gateway, `<gateway>/<route>`, written by
+swiss for video engines) is used instead, and that one must end in `/<route>`: openresty strips
+the prefix and H3 adds it back to download URLs. With neither, H3 infers the base from the
+request headers.
+
+## Autoscaling
+
+Off by default. Per enabled pool, keyed by the pool's Deployment name
+(`<release>-server-<pool>`), which is the `serviceId` the decision server resolves the workload by:
+
+- `scaler.enabled` renders an `LLMScaler` (`autoscaling.modelsphere.dev/v1alpha1`, Custom provider)
+  targeting the pool Deployment and following the decision server at `scaler.serverAddress`.
+  The operator owns the replica count and `pools.<pool>.replicaCount` is ignored. The chart
+  still renders `spec.replicas`, as the **live** count of the existing Deployment (read with
+  `lookup`), so an upgrade never resizes the pool: a dropped field would default to 1 and kill
+  the extra Pods mid-task. Before the Deployment exists it starts at the scaler's `minReplicas`.
+  Plain `helm template` and GitOps renders (no `lookup`) write `minReplicas`, and applying one
+  resizes a running pool to it: render those with the scaler off, or set the counts yourself.
+- `sloRequirement.enabled` renders a `JobSLORequirement` (`inference.modelsphere.dev/v1alpha1`)
+  sizing the pool from its queue backlog.
+
+| Value | Default | Per pool | |
+| --- | --- | --- | --- |
+| `scaler.serverAddress` | `http://decision-gen.llm-scaler.svc:80` | | Decision server |
+| `scaler.minReplicas` / `maxReplicas` | `1` / `200` | `pools.<pool>.scaler.*` | Backstops; the SLO is the real bound |
+| `scaler.scaleDown` | `CacheAware`, step 10, window 10s | | |
+| `sloRequirement.minReplicas` | `1` | `pools.<pool>.sloRequirement.minReplicas` | `minimumDeployment` |
+| `sloRequirement.maxReplicas` | empty | `pools.<pool>.sloRequirement.maxReplicas` | `maximumDeployment`; **empty = not scaled** |
+| `sloRequirement.priority` | `10` | `pools.<pool>.sloRequirement.priority` | |
+| `sloRequirement.queue.maxDepth` | empty: `5` (fl2va), `2` (ref2va) | `pools.<pool>.sloRequirement.queue.maxDepth` | Backlog per replica |
+| `sloRequirement.queue.promql` | backlog of this pool | `pools.<pool>.sloRequirement.queue.promql` | `__SCOPE__` → `namespace, service, capability` of this pool |
+
+**`sloRequirement.enabled` with `maxReplicas` empty renders the requirement without
+`maximumDeployment`, which the decision server treats as unmanaged: the pool is not scaled.**
+Set `maxReplicas` (shared or per pool) to turn scaling on.
+
+The default query is scoped to this release's pool, so two releases in one Prometheus do not
+read each other's queue:
+
+```promql
+sum(max by(status)(h3_queue_tasks{namespace="<ns>", service="<release>-server-<pool>", capability="<pool>", status=~"queued|running"})) or vector(0)
+```
+
+The default query reads the series the chart's ServiceMonitor scrapes off the pool's own Pods,
+and a pool's Pods export only their own capability's backlog. So the render fails when:
+
+- `sloRequirement.enabled` and `serviceMonitor.enabled: false`: the backlog would always read 0;
+- a scaled pool (maximum set) has `minReplicas: 0`: at 0 replicas no Pod is left to report the
+  backlog that should scale it back up.
+
+A `promql` of your own lifts both checks.
+
+Adopting hand-made objects of the same names: helm refuses to take over objects it did not
+create. Delete (or label/annotate for helm adoption) existing `LLMScaler` / `JobSLORequirement`
+objects named `<release>-server-<pool>` before turning these on.
 
 ## Scheduling
 
 | Value | Default | Notes |
 | --- | --- | --- |
 | `sglang.schedulerName` | `""` | Set it to the scheduler your other GPU workloads use (e.g. `volcano`): two schedulers placing Pods on the same GPUs can double-book them. H3 needs no gang scheduling; each Pod is a self-contained 4-GPU unit |
-| `sglang.priorityClassName` | `""` | Without one the Pods run at priority 0 and lose GPUs to higher-priority workloads |
+| `sglang.priorityClassName` | `""` | Without one the Pods run at priority 0 and lose GPUs to higher-priority workloads. Top-level `schedulerName` / `priorityClassName` / `affinity` apply when these are unset |
 | `router.priorityClassName` | `""` | The Router is the entry point; healthy backends are useless if it is preempted |
 | `sglang.tolerations` | `nvidia.com/gpu` (any value) `NoSchedule` | For GPU nodes tainted for compute. The Router carries no toleration and stays on CPU nodes |
 | `sglang.gpuProduct` | `[]` | Restrict to GPU models (`nvidia.com/gpu.product` values); `sglang.affinity`, when set, wins |
@@ -426,7 +572,8 @@ accept the long tail.
 
 | Value | Default | Notes |
 | --- | --- | --- |
-| `database.url` | `""` | Required unless `database.existingSecret` or `database.fromSecret.{namespace,name}` is set |
+| `database.url` | `""` | Empty: read from `database.fromSecret` (default: the modelsphere CNPG cluster, see Database) |
+| `pools.<pool>.replicaCount` | `1` | Ignored while `scaler.enabled` |
 | `sharedStorage.storageClass` | `""` | Must be RWX; empty uses the cluster default class |
 | `server.apiService.type` | `ClusterIP` | `NodePort` for direct access without the Router |
 | `sglang.shmSize` | `64Gi` | `/dev/shm` as `emptyDir{medium: Memory}`; **counts against the container memory limit** |
