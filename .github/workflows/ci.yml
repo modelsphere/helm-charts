@@ -131,3 +131,12 @@ jobs:
             echo "::error::a credential file is tracked"
             exit 1
           fi
+
+      # The daily sync opens a pull request from whatever this selector
+      # decides is stable. A broken filter would vendor a release candidate,
+      # so the pure functions are tested here on every change. PyYAML is the
+      # script's only non-stdlib dependency.
+      - name: Upstream chart sync unit tests
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          python3 hack/test_sync_upstream_charts.py

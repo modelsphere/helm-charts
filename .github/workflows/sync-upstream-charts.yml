@@ -1,0 +1,146 @@
+# Copies vendored charts from the latest stable GitHub Release of each upstream
+# repo (hack/sync-upstream-charts.py) and opens or updates a pull request.
+#
+# The pull request is the point. main publishes immediately: release.yml
+# packages every chart whose version moved and pushes it to GitHub Pages.
+# A sync that has not been looked at must not take that path, so this
+# workflow never pushes to main. It does not use pull_request_target.
+name: sync-upstream-charts
+
+on:
+  schedule:
+    # 08:00 PT every day in standard time (PST, UTC-8); GitHub cron is UTC,
+    # so it runs at 09:00 PT during daylight time.
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+# One sync at a time. Cancelling a run that is mid-push would leave the
+# branch and its pull request disagreeing about what was copied.
+concurrency:
+  group: sync-upstream-charts
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: check-chart-version.sh merge-bases against origin/main,
+          # and check-chart-images.sh reads the base Chart.yaml out of git.
+          fetch-depth: 0
+          # ci.yml turns this off because nothing there pushes. This job does
+          # not push with the checkout token either: create-pull-request pushes
+          # chore/sync-upstream-charts (never main) with its token input.
+          persist-credentials: true
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+
+      # crane resolves image digests. The sync refuses a chart whose Docker Hub
+      # mirror is not published yet, and check-chart-images.sh does the same
+      # for every image a bumped chart renders.
+      - name: Install crane
+        run: |
+          curl -sSfL https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz \
+            | sudo tar -xz -C /usr/local/bin crane
+          crane version
+
+      # The sync script's only non-stdlib dependency.
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
+
+      # continue-on-error: a chart that needs a human (patch no longer matches,
+      # kept dependencies diverged, lint failed) must not hide the charts that
+      # did sync. The job is failed at the end if any chart needs attention.
+      # A missing image is a warning inside the script, not a step failure.
+      - name: Sync charts that are behind
+        id: sync
+        continue-on-error: true
+        env:
+          # GITHUB_TOKEN raises the API rate limit. Pushes and pull requests
+          # made with it do not trigger other workflows; see the pull request step.
+          GH_TOKEN: ${{ github.token }}
+        run: python3 hack/sync-upstream-charts.py --pr-body "$RUNNER_TEMP/pr-body.md"
+
+      # Commit locally on the checked-out base, then gate, then let
+      # create-pull-request publish. check-chart-version.sh diffs commits, so
+      # the commit comes first; check-chart-images.sh reads the tree either
+      # way. Nothing is pushed unless both pass: a failure here stops the job
+      # before the action runs. The action pushes chore/sync-upstream-charts,
+      # never main.
+      #
+      # Stay on the branch actions/checkout left us on (main for the schedule).
+      # Commits made there during the workflow are what the action puts on the
+      # pull request branch. It updates an open pull request from
+      # chore/sync-upstream-charts instead of opening another, and leaves that
+      # branch in place (delete-branch defaults to false) so the next run
+      # reuses it.
+      #
+      # Pushes and pull requests made with GITHUB_TOKEN do not trigger other
+      # workflows (ci.yml, check-images.yml). That is why lint, inside the sync
+      # script, and these two checks run here. To get the normal checks on the
+      # pull request, close and reopen it, or push an empty commit to the
+      # branch. A PAT or a GitHub App token would trigger them, and none is
+      # configured.
+      #
+      # GITHUB_TOKEN, also when used by create-pull-request, needs the
+      # repository (or org) setting "Allow GitHub Actions to create and approve
+      # pull requests". Without it the push succeeds and the pull request call
+      # fails.
+      - name: Commit synced charts and run the image and version checks
+        id: gate
+        if: steps.sync.outputs.synced != ''
+        env:
+          SYNCED: ${{ steps.sync.outputs.synced }}
+        run: |
+          set -euo pipefail
+
+          # The sync reported charts, but the tree matches the checkout.
+          # Skip the pull request: running the action with nothing ahead of
+          # base would reset the existing branch.
+          if [ -z "$(git status --porcelain -- charts)" ]; then
+            echo "no chart file changes; not opening a pull request"
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -A -- charts
+          # Local only. create-pull-request is what publishes, and only the
+          # chore branch. check-chart-version.sh needs this commit to exist.
+          git commit -m "chore: sync ${SYNCED} from upstream stable releases"
+
+          git fetch --no-tags origin main
+          hack/check-chart-images.sh origin/main
+          hack/check-chart-version.sh origin/main
+
+          echo "changes=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the pull request
+        if: steps.sync.outputs.synced != '' && steps.gate.outputs.changes == 'true'
+        uses: peter-evans/create-pull-request@3ffccacd46053766916f087ce41d627c0b8cf2d1 # v8.1.3
+        with:
+          token: ${{ github.token }}
+          base: main
+          branch: chore/sync-upstream-charts
+          add-paths: charts
+          commit-message: 'chore: sync ${{ steps.sync.outputs.synced }} from upstream stable releases'
+          title: 'chore: sync ${{ steps.sync.outputs.synced }} from upstream stable releases'
+          body-path: ${{ runner.temp }}/pr-body.md
+          committer: 'github-actions[bot] <41898283+github-actions[bot]@users.noreply.github.com>'
+          author: 'github-actions[bot] <41898283+github-actions[bot]@users.noreply.github.com>'
+
+      # Runs even when the sync step failed, so a chart that needs attention
+      # turns the job red after the pull request for the charts that did sync
+      # has been opened. A clean run (nothing behind, or everything synced)
+      # leaves this step skipped.
+      - name: Fail if a chart needs attention
+        if: always() && (steps.sync.outcome == 'failure' || steps.sync.outputs.attention != '')
+        run: |
+          echo "::error::a vendored chart needs attention; the sync log has the details"
+          exit 1
