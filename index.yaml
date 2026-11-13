@@ -1212,6 +1212,31 @@ entries:
   sglang:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-11-13T02:54:42.517645789Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.3
+    - alias: continuationGateway
+      condition: continuationGateway.enabled
+      name: continuation-gateway
+      repository: file://../continuation-gateway
+      version: 0.1.4
+    description: SGLang inference deployment -- single-node, multi-node (LeaderWorkerSet)
+      or prefill/decode-disaggregated (DisaggregatedSet or merged colocate pod), with
+      optional cache-aware routing, autoscaling and hang detection
+    digest: fee55e06f22d833f4270926768a522a4d7f206b93ab5cee40b294b56fc3edb4d
+    home: https://github.com/modelsphere/helm-charts
+    name: sglang
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/sglang-0.9.34/sglang-0.9.34.tgz
+    version: 0.9.34
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-11-12T09:08:24.002170232Z"
     dependencies:
     - condition: cart.enabled
@@ -2372,6 +2397,30 @@ entries:
   vllm:
   - apiVersion: v2
     appVersion: 1.0.0
+    created: "2026-11-13T02:54:42.717590187Z"
+    dependencies:
+    - condition: cart.enabled
+      name: cart
+      repository: file://../cart
+      version: 0.2.3
+    - alias: continuationGateway
+      condition: continuationGateway.enabled
+      name: continuation-gateway
+      repository: file://../continuation-gateway
+      version: 0.1.4
+    description: vLLM inference deployment -- single-node or multi-node (LeaderWorkerSet),
+      with optional cache-aware routing, autoscaling and hang detection
+    digest: 70567ada27876ed8ccf308decb27436cc3a57522646687b731eae6538f5be93a
+    home: https://github.com/modelsphere/helm-charts
+    name: vllm
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.9.5/vllm-0.9.5.tgz
+    version: 0.9.5
+  - apiVersion: v2
+    appVersion: 1.0.0
     created: "2026-11-05T08:02:40.534343738Z"
     dependencies:
     - condition: cart.enabled
@@ -3244,4 +3293,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-11-12T09:08:24.002596267Z"
+generated: "2026-11-13T02:54:42.718053926Z"
