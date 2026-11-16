@@ -6,7 +6,7 @@ unreliable. [swiss](../swiss) is then pointed at the cluster instead of GitHub P
 
 | path | content | default upstream |
 |---|---|---|
-| `/model-catalog/` | `index.json`, every version file it names, perf reports | `https://modelsphere.github.io/model-catalog/` |
+| `/model-catalog/` | `index.json` and `index-v2.json`, every version and variant file they name, histories, perf reports | `https://modelsphere.github.io/model-catalog/` |
 | `/helm-charts/` | `index.yaml` (archive URLs rewritten to relative names) and every chart archive | `https://modelsphere.github.io/helm-charts/` |
 | `/status.json` | result of the last sync round | |
 
@@ -65,15 +65,22 @@ helm install catalog-mirror ./helm-charts/charts/catalog-mirror -n swiss-system 
   --set snapshot.checksum=$(sha256sum snapshot.tar.gz | cut -d' ' -f1)
 ```
 
-An init container (`files/snapshot.py`) unpacks it onto the volume on every pod
-start, by atomic rename and indexes last, then writes a `status.json` saying the
-copy is a snapshot. With `sync.enabled=false` no sync container runs and nginx is
+An init container (`files/snapshot.py`) checks the archive whole -- every file
+its indexes name, with the digest they pin; chart archives named by bare file
+name -- and refuses it before writing anything if that fails. It then unpacks it
+onto the volume on every pod start, by atomic rename and indexes last, drops the
+ETags sync keeps, and writes a `status.json` saying the copy is a snapshot. With `sync.enabled=false` no sync container runs and nginx is
 Ready once both indexes are there; `helm test` checks the copy the same way.
 A ConfigMap holds at most 1 MiB, so leave the catalog's HTML reports out: swiss
-does not read them, and they are most of the catalog's size.
+does not read them, and they are most of the catalog's size. Create it with
+`kubectl create` or `kubectl apply --server-side`: a client-side apply copies
+the whole archive into an annotation that holds 256 KiB. With sync off, the
+volume can be an emptyDir (`--set persistence.enabled=false`).
 
 The snapshot and sync can also go together: the pod starts serving the snapshot at
-once, and the first sync round moves it forward.
+once, and the first sync round moves it forward -- both `index.json` and the
+`index-v2.json` swiss reads with `schemaVersion: v2`. The ConfigMap is optional
+then: without it the pod starts from what sync has put on the volume.
 
 ## How it works
 

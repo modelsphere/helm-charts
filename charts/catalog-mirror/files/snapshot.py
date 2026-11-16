@@ -6,22 +6,39 @@ is reachable (an air-gapped install bundle, say), packed as a gzip'd tar holding
 the two trees nginx serves -- model-catalog/ and helm-charts/ -- and handed over
 in a ConfigMap. Nothing else may be in the archive.
 
-Same rules as sync.py, so a pod that restarts halfway never serves a torn copy:
-  - every file goes in by atomic rename, and the indexes (index.json,
-    index-v2.json, index.yaml) only after everything they name is there;
-  - files are never deleted, so a snapshot older than what sync already fetched
-    only rewinds the indexes, and the next sync round moves them forward again.
+The archive is checked whole before anything is written, by the rules sync.py
+follows for upstream, so a broken snapshot fails this init container instead of
+leaving a Ready pod that answers 404s:
+  - model-catalog/index.json and helm-charts/index.yaml are present (they are
+    what readiness looks for);
+  - every version file index.json names, and every variant file index-v2.json
+    names (when there is one), is in the archive with the sha256 its index pins;
+    every history it names is there;
+  - index.yaml names its archives by bare file name -- an absolute URL would
+    send helm upstream -- and each one is in the archive with a digest the
+    index lists.
+
+Then, as sync.py does, so a pod that restarts halfway never serves a torn copy:
+every file goes in by atomic rename, and the indexes only after everything
+they name. Files are never deleted. The ETags sync.py keeps are dropped: they
+belong to the upstream copy the snapshot may just have rewound, and kept, a
+304 would leave the snapshot's indexes in place until upstream next changed.
 
 status.json says the copy came from a snapshot, in the shape verify.py reads.
 
   python3 snapshot.py <archive>
+  SNAPSHOT_OPTIONAL=1   a missing archive is not an error (sync is on, and the
+                        snapshot is only where a fresh volume starts from)
 """
-import json, os, sys, tarfile
+import hashlib, json, os, re, sys, tarfile
 from datetime import datetime, timezone
 
 DATA = os.environ.get("DATA_DIR", "/data")
 TREES = ("model-catalog", "helm-charts")
 INDEXES = ("index.json", "index-v2.json", "index.yaml")
+REQUIRED = ("model-catalog/index.json", "helm-charts/index.yaml")
+URL_LINE = re.compile(r"^\s*-\s*(\S+\.tgz)\s*$", re.M)
+DIGEST_LINE = re.compile(r"^\s*digest:\s*([0-9a-f]{64})\s*$", re.M)
 
 
 def write_atomic(path, data):
@@ -38,29 +55,83 @@ def safe_rel(rel):
     p = os.path.normpath(rel)
     if os.path.isabs(rel) or p.startswith("..") or "/../" in f"/{p}/":
         raise ValueError(f"path {rel!r} escapes the mirror")
-    if p.split("/")[0] not in TREES:
-        raise ValueError(f"path {rel!r} is outside {' and '.join(TREES)}")
+    parts = p.split("/")
+    if parts[0] not in TREES or len(parts) < 2:
+        raise ValueError(f"path {rel!r} is not a file under {' or '.join(TREES)}")
     return p
+
+
+def sha(b):
+    return hashlib.sha256(b).hexdigest()
+
+
+def check(files):
+    """Every reason the archive cannot be served as it is; empty when it can."""
+    bad = [f"{r} is missing" for r in REQUIRED if r not in files]
+    if bad:
+        return bad
+
+    def pinned(rel, digest, what):
+        algo, _, want = (digest or "").partition(":")
+        key = f"model-catalog/{rel}"
+        if algo != "sha256" or not want:
+            bad.append(f"{what} {rel}: no sha256 digest in the index")
+        elif key not in files:
+            bad.append(f"{what} {rel}: named by the index, not in the archive")
+        elif sha(files[key]) != want:
+            bad.append(f"{what} {rel}: sha256 {sha(files[key])[:12]} != index digest {want[:12]}")
+
+    for m in json.loads(files["model-catalog/index.json"]).get("models", []):
+        for v in m.get("versions", []):
+            pinned(v.get("path", ""), v.get("digest"), "catalog v1")
+    if "model-catalog/index-v2.json" in files:
+        for m in json.loads(files["model-catalog/index-v2.json"]).get("models", []):
+            for v in m.get("variants", []):
+                pinned(v.get("path", ""), v.get("digest"), "catalog v2")
+                if v.get("history") and f"model-catalog/{v['history']}" not in files:
+                    bad.append(f"catalog v2 {v['history']}: named by the index, not in the archive")
+
+    text = files["helm-charts/index.yaml"].decode()
+    digests = set(DIGEST_LINE.findall(text))
+    urls = URL_LINE.findall(text)
+    if not urls:
+        bad.append("helm-charts/index.yaml lists no .tgz archives")
+    for u in urls:
+        if "/" in u:
+            bad.append(f"index.yaml names {u}: archives must be bare file names, or helm fetches them upstream")
+        elif f"helm-charts/{u}" not in files:
+            bad.append(f"index.yaml names {u}, which is not in the archive")
+        elif sha(files[f"helm-charts/{u}"]) not in digests:
+            bad.append(f"{u}: sha256 matches no digest in index.yaml")
+    return bad
 
 
 def main():
     archive = sys.argv[1]
-    files, indexes = [], []
+    if not os.path.exists(archive) and os.environ.get("SNAPSHOT_OPTIONAL") == "1":
+        print(f"snapshot: no {archive}; sync will fill the volume", flush=True)
+        return
+    files = {}
     with tarfile.open(archive, "r:gz") as t:
         for m in t.getmembers():
             if m.isdir():
                 continue
             if not m.isfile():
                 raise ValueError(f"{m.name}: only regular files may be in a snapshot")
-            rel = safe_rel(m.name)
-            entry = (rel, t.extractfile(m).read())
-            (indexes if os.path.basename(rel) in INDEXES else files).append(entry)
-    have = {rel.split("/")[0] for rel, _ in indexes}
-    if have != set(TREES):
-        raise ValueError(f"the snapshot must carry an index for both {' and '.join(TREES)}; it has {sorted(have) or 'none'}")
-    for rel, data in files + indexes:
-        write_atomic(os.path.join(DATA, rel), data)
-    n = {tree: sum(rel.startswith(tree + "/") for rel, _ in files + indexes) for tree in TREES}
+            files[safe_rel(m.name)] = t.extractfile(m).read()
+    problems = check(files)
+    if problems:
+        for p in problems[:50]:
+            print(f"snapshot: {p}", file=sys.stderr)
+        raise SystemExit(f"snapshot: {len(problems)} problem(s), nothing written")
+    order = sorted(files, key=lambda r: os.path.basename(r) in INDEXES)  # indexes last
+    for rel in order:
+        write_atomic(os.path.join(DATA, rel), files[rel])
+    try:
+        os.remove(os.path.join(DATA, ".etags.json"))
+    except FileNotFoundError:
+        pass
+    n = {tree: sum(rel.startswith(tree + "/") for rel in files) for tree in TREES}
     status = {
         "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source": "snapshot",

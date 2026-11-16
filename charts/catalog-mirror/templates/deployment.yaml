@@ -39,6 +39,11 @@ spec:
           command: ["python3", "-u", "/files/snapshot.py", "/snapshot/{{ .Values.snapshot.key }}"]
           env:
             - { name: DATA_DIR, value: /data }
+            {{- if .Values.sync.enabled }}
+            # With sync on, the snapshot is only where a fresh volume starts:
+            # its ConfigMap going away must not take a working mirror down.
+            - { name: SNAPSHOT_OPTIONAL, value: "1" }
+            {{- end }}
           volumeMounts:
             - { name: data, mountPath: /data }
             - { name: files, mountPath: /files, readOnly: true }
@@ -113,6 +118,9 @@ spec:
         - name: snapshot
           configMap:
             name: {{ .Values.snapshot.configMap }}
+            {{- if .Values.sync.enabled }}
+            optional: true
+            {{- end }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}

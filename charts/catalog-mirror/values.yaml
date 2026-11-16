@@ -24,6 +24,7 @@ upstream:
 sync:
   # false: no sync container. The pod serves what `snapshot` put on the volume and
   # nothing ever refreshes it -- for a cluster with no route to upstream at all.
+  # Everything else under sync, and upstream above, is then unused.
   enabled: true
   # Seconds between rounds. An unchanged upstream costs one conditional request per
   # index (If-None-Match -> 304), so a short interval is cheap.
@@ -41,7 +42,11 @@ sync:
 # trees nginx serves, model-catalog/ and helm-charts/, in binaryData of a
 # ConfigMap you create (an air-gapped install bundle carries one). An init
 # container unpacks it onto the volume before nginx starts, on every pod start.
-# With sync on as well, the next round moves the copy forward from there.
+# The archive is checked whole first (every file its indexes name, with the
+# right digest; chart archives by bare name) and nothing is written if it fails.
+# With sync on as well, the next round moves the copy forward from there, and a
+# missing ConfigMap is skipped rather than fatal. With sync off, persistence buys
+# nothing -- the snapshot is unpacked on every start -- so it can be disabled.
 snapshot:
   configMap: ""
   key: snapshot.tar.gz
