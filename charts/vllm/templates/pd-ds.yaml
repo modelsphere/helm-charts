@@ -276,8 +276,8 @@ spec:
           # an EMPTY role list, which would be a router that can never route.
           # Mid-life growth and shrinkage are both the drift liveness probe's:
           # it restarts this container to re-bake argv (shrinkage only once
-          # the dropped IP stops serving, so a DNS flicker never restarts the
-          # router). publishNotReadyAddresses is what
+          # the dropped address stops serving or serves another engine, so a
+          # DNS flicker never restarts the router). publishNotReadyAddresses is what
           # makes placement observable at all -- the address appears as soon as
           # the pod has an IP, so this sees scheduled engines, not just Ready
           # ones.
@@ -300,17 +300,20 @@ spec:
           #                demand.
           PF_HL={{ $fullname }}-prefill-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
           DC_HL={{ $fullname }}-decode-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
-          for i in $(seq 1 60); do
+          # No attempt cap: an empty role is an engine set that is not placed
+          # yet (atomic re-roll, insufficient GPUs), and exiting only turns
+          # that wait into CrashLoopBackOff, whose backoff then delays the
+          # router behind engines that have since come up. The startupProbe's
+          # budget still bounds a boot that never finishes.
+          i=0
+          while :; do
+            i=$((i+1))
             PF_IPS=$(getent hosts "$PF_HL" | awk '{print $1}' | sort -u)
             DC_IPS=$(getent hosts "$DC_HL" | awk '{print $1}' | sort -u)
             [ -n "$PF_IPS" ] && [ -n "$DC_IPS" ] && break
             echo "router: slice {{ $s }} upstreams not yet resolving (prefill: '${PF_IPS:-none}', decode: '${DC_IPS:-none}'; attempt $i)"
             sleep 5
           done
-          if [ -z "$PF_IPS" ] || [ -z "$DC_IPS" ]; then
-            echo "router: timed out waiting for slice {{ $s }} upstreams to resolve: prefill '${PF_IPS:-none}', decode '${DC_IPS:-none}'" >&2
-            exit 1
-          fi
           PF_ARGS=""
           for ip in $PF_IPS; do PF_ARGS="$PF_ARGS --prefill http://$ip:{{ $pd.prefill.httpPort | default 8001 }}{{ $prefillPortSuffix }}"; done
           DC_ARGS=""

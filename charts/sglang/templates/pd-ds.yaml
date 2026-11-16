@@ -244,8 +244,8 @@ spec:
           # an EMPTY role list, which would be a router that can never route.
           # Mid-life growth and shrinkage are both the drift liveness probe's:
           # it restarts this container to re-bake argv (shrinkage only once
-          # the dropped IP stops serving, so a DNS flicker never restarts the
-          # router). publishNotReadyAddresses is what
+          # the dropped address stops serving or serves another engine, so a
+          # DNS flicker never restarts the router). publishNotReadyAddresses is what
           # makes placement observable at all -- the address appears as soon as
           # the pod has an IP, so this sees scheduled engines, not just Ready
           # ones.
@@ -256,11 +256,19 @@ spec:
           # by the headless service) is dropped from argv, and if that empties
           # a role we fall back here to re-resolve, not exit. Liveness probe
           # handles drift after exec; this loop only cares about boot.
-          for i in $(seq 1 60); do
+          #
+          # No attempt cap: an empty role is an engine set that is not placed
+          # yet (atomic re-roll, insufficient GPUs), and exiting only turns
+          # that wait into CrashLoopBackOff, whose backoff then delays the
+          # router behind engines that have since come up. The startupProbe's
+          # budget still bounds a boot that never finishes.
+          i=0
+          while :; do
+            i=$((i+1))
             PF_IPS=$(getent hosts "$PF_HL" | awk '{print $1}' | sort -u)
             DC_IPS=$(getent hosts "$DC_HL" | awk '{print $1}' | sort -u)
             if [ -z "$PF_IPS" ] || [ -z "$DC_IPS" ]; then
-              echo "router: slice {{ $s }} upstreams not yet resolving (prefill: '${PF_IPS:-none}', decode: '${DC_IPS:-none}'; attempt $i/60)" >&2
+              echo "router: slice {{ $s }} upstreams not yet resolving (prefill: '${PF_IPS:-none}', decode: '${DC_IPS:-none}'; attempt $i)" >&2
               sleep 5
               continue
             fi
@@ -406,7 +414,7 @@ spec:
           DC_KEPT=$(write_role_snapshot decode  "$DC_HL" "$DC_IPS")
           if [ -z "$PF_KEPT" ] || [ -z "$DC_KEPT" ]; then
             echo "router: slice {{ $s }} after dead-ip filter: prefill='${PF_KEPT:-none}', decode='${DC_KEPT:-none}';" \
-                 "returning to DNS resolve (attempt $i/60)" >&2
+                 "returning to DNS resolve (attempt $i)" >&2
             sleep 5
             continue
           fi
@@ -426,8 +434,6 @@ spec:
             --host 0.0.0.0 \
             --port {{ $root.Values.service.port }}
           done
-          echo "router: exhausted 60 resolve+filter cycles without a usable upstream set" >&2
-          exit 1
         {{- /* The router's only read of "am I useful" is answering "is at
                least one engine of each role taking HTTP behind me". exec to
                avoid depending on the router's own /health (which cannot see

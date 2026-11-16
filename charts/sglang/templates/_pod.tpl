@@ -1129,9 +1129,13 @@ exit 0
        Missing argv-file is tolerated (pod still in boot loop).
 
        Cadence: 10s period, 2 failures = 20s of sustained drift before
-       restart. Tight because false positives are essentially impossible
-       (the headless Service selector is locked to this slice's leaders)
-       and late detection costs real capacity. Drop straight in as the
+       restart. Tight because late detection costs real capacity, and false
+       positives need two things to coincide: growth only counts an IP the
+       slice's own headless Service returns AND that serves; shrink only
+       counts an IP DNS dropped AND that is down or another engine -- a
+       flicker that lands on an engine that is slow or restarting at that
+       moment for two ticks running is the one accepted false positive.
+       Drop straight in as the
        router container's livenessProbe; pair with the readinessProbe from
        sglang.pdRouterProbes -- separate concerns. */ -}}
 {{- define "sglang.pdRouterLivenessProbe" -}}
@@ -1183,11 +1187,16 @@ PY
 # Is the engine on $ip answering $path right now. Short timeout so a slow
 # engine never stalls the probe itself.
 serving() { python3 -c "import urllib.request; urllib.request.urlopen('http://$1:$2$3', timeout=2)" 2>/dev/null; }
+# The role's current addresses, one per line; empty on a resolver blip
+# (timeout(1) kills getent with 124 and the pipeline emits nothing).
+resolve() { timeout 2 getent hosts "$1" 2>/dev/null | awk '{print $1}' | sort -u; }
 check() {
-  local role=$1 svc=$2 file="/tmp/pd-router/$3" port=$4 path=$5
+  # $2 (svc) is not read; it keeps the call naming the Service it checks.
+  # $6 is that Service's resolve output, taken once per tick by the caller
+  # so the cross-role gate costs no extra lookup.
+  local role=$1 svc=$2 file="/tmp/pd-router/$3" port=$4 path=$5 resolved=$6
   [ -f "$file" ] || return 0
-  local ip resolved
-  resolved=$(timeout 2 getent hosts "$svc" 2>/dev/null | awk '{print $1}' | sort -u)
+  local ip
   while read -r ip; do
     [ -n "$ip" ] || continue
     # Fast path: does this ip appear in the boot snapshot at all. Fixed-string
@@ -1235,21 +1244,25 @@ check() {
       rc=1
     fi
   done <<<"$resolved"
-  # If timeout(1) kills getent (124 = resolver blip), the awk|sort pipeline
-  # emits empty input, the while loop never fires, rc stays 0 -- a CoreDNS
+  # On a resolver blip $resolved is empty, the while loop never fires, rc
+  # stays 0 -- a CoreDNS
   # flake is treated as "no data", not "drift". Restarting every PD router
   # cluster-wide because of a 2s resolver stall would be the biggest self-
-  # inflicted DoS the chart could ship. The same empty answer skips the
-  # shrink check below: an empty role is a resolver blip or an atomic
-  # re-roll, and restarting into an empty set only crash-loops.
-  [ -n "$resolved" ] || return 0
+  # inflicted DoS the chart could ship. An empty answer for ANY role also
+  # skips the shrink check below ($all_resolve): an empty role is a
+  # resolver blip or an atomic re-roll, and a restart then only parks the
+  # router in its boot loop waiting on that role.
+  [ -n "$resolved" ] && [ "$all_resolve" -eq 1 ] || return 0
   # Shrink: an argv IP missing from a non-empty answer. DNS alone never
   # decides -- a partial answer is the flicker case -- so the IP itself
   # must corroborate: it is gone only if it no longer serves $path, or it
   # serves with a different identity than the snapshot (the IP was reused
   # by another pod, possibly another release's engine on the same port).
-  # A live engine with its own identity is a DNS flicker: skip. The restart
-  # re-snapshots from DNS, so a real scale-down fires once, not in a loop.
+  # A live engine with its own identity is a DNS flicker: skip. (A snapshot
+  # taken without identity, "ip||", cannot tell its own engine from another:
+  # once the live side reports one it fires -- as the growth branch above
+  # does for the same IP on the next clean answer.) The restart re-snapshots
+  # from DNS, so a real scale-down fires once, not in a loop.
   local want_r want_t
   while IFS='|' read -r ip want_r want_t; do
     [ -n "$ip" ] || continue
@@ -1262,12 +1275,24 @@ check() {
     else
       echo "router stale: $role upstream $ip left DNS and no longer serves" >&2
     fi
+    # One is enough to restart, and each dead address costs a full probe
+    # timeout: stop here so a large scale-down cannot run the probe past
+    # its own timeoutSeconds.
     rc=1
+    break
   done <"$file"
 }
+# Resolve every role once; shrink is only acted on while all of them
+# resolve (see check).
+all_resolve=1
+{{- range $role, $target := $roles }}
+{{- if ne $role "router" }}
+res_{{ $role }}=$(resolve {{ $target.host | quote }}); [ -n "$res_{{ $role }}" ] || all_resolve=0
+{{- end }}
+{{- end }}
 {{- range $role, $target := $roles }}
 {{- if ne $role "router" }}{{/* the router itself, not an upstream: nothing to drift-check */}}
-check {{ $role | quote }} {{ $target.host | quote }} {{ $role }}-ips {{ $target.port | quote }} {{ required (printf "pd router liveness target %s needs a path" $role) $target.path | quote }}
+check {{ $role | quote }} {{ $target.host | quote }} {{ $role }}-ips {{ $target.port | quote }} {{ required (printf "pd router liveness target %s needs a path" $role) $target.path | quote }} "$res_{{ $role }}"
 {{- end }}
 {{- end }}
 exit $rc
