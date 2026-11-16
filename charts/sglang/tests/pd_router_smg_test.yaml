@@ -185,3 +185,25 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
           pattern: '127\.0\.0\.1'
+
+  # Shrink drift: an argv IP that left DNS restarts the router only when the
+  # address itself corroborates it (no longer serves, or serves another
+  # engine). DNS alone must never fire, and an empty answer (resolver blip,
+  # atomic re-roll) must skip the shrink check entirely, or a flicker would
+  # restart every PD router at once. The behaviour is exercised against fake
+  # DNS/engines outside CI; these pin the guards in the rendered script.
+  - it: pd-ds liveness restarts on shrink only when the dropped IP corroborates
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: '\[ -n "\$resolved" \] \|\| return 0\n'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: 'grep -qxF "\$ip" && continue\n\s+if serving "\$ip" "\$port" "\$path"; then\n\s+live=\$\(live_id "\$ip"\) \|\| continue'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: 'done <"\$file"\n\}'
