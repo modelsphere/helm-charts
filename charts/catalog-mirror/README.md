@@ -59,20 +59,20 @@ helm-charts/index.yaml           helm-charts/<chart>-<version>.tgz
 writes it. Then:
 
 ```sh
-kubectl -n swiss-system create configmap catalog-mirror-seed --from-file=seed.tar.gz
+kubectl -n swiss-system create configmap catalog-mirror-snapshot --from-file=snapshot.tar.gz
 helm install catalog-mirror ./helm-charts/charts/catalog-mirror -n swiss-system \
-  --set sync.enabled=false --set seed.configMap=catalog-mirror-seed \
-  --set seed.checksum=$(sha256sum seed.tar.gz | cut -d' ' -f1)
+  --set sync.enabled=false --set snapshot.configMap=catalog-mirror-snapshot \
+  --set snapshot.checksum=$(sha256sum snapshot.tar.gz | cut -d' ' -f1)
 ```
 
-An init container (`files/seed.py`) unpacks it onto the volume on every pod
+An init container (`files/snapshot.py`) unpacks it onto the volume on every pod
 start, by atomic rename and indexes last, then writes a `status.json` saying the
-copy is a seed. With `sync.enabled=false` no sync container runs and nginx is
+copy is a snapshot. With `sync.enabled=false` no sync container runs and nginx is
 Ready once both indexes are there; `helm test` checks the copy the same way.
 A ConfigMap holds at most 1 MiB, so leave the catalog's HTML reports out: swiss
 does not read them, and they are most of the catalog's size.
 
-The seed and sync can also go together: the pod starts serving the seed at
+The snapshot and sync can also go together: the pod starts serving the snapshot at
 once, and the first sync round moves it forward.
 
 ## How it works
@@ -108,6 +108,6 @@ an existing one, set `persistence.existingClaim`.
 | `sync.intervalSeconds` | `300` | seconds between rounds |
 | `sync.extraEnv` | `[]` | e.g. `HTTPS_PROXY` when GitHub is reachable only through a proxy |
 | `image.nginx` / `image.python` | `docker.io/library/{nginx:1.27-alpine,python:3.12-alpine}` | point at a mirror if the cluster cannot pull from Docker Hub |
-| `sync.enabled` | `true` | `false`: serve the seed only, see above |
-| `seed.configMap` / `seed.key` / `seed.checksum` | empty / `seed.tar.gz` / empty | a packed copy to start from |
+| `sync.enabled` | `true` | `false`: serve the snapshot only, see above |
+| `snapshot.configMap` / `snapshot.key` / `snapshot.checksum` | empty / `snapshot.tar.gz` / empty | a packed copy to start from |
 | `persistence.*` | 2Gi, cluster default class | `enabled: false` uses an emptyDir (full re-sync on restart) |

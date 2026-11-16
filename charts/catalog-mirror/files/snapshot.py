@@ -9,12 +9,12 @@ in a ConfigMap. Nothing else may be in the archive.
 Same rules as sync.py, so a pod that restarts halfway never serves a torn copy:
   - every file goes in by atomic rename, and the indexes (index.json,
     index-v2.json, index.yaml) only after everything they name is there;
-  - files are never deleted, so a seed older than what sync already fetched
+  - files are never deleted, so a snapshot older than what sync already fetched
     only rewinds the indexes, and the next sync round moves them forward again.
 
-status.json says the copy came from a seed, in the shape verify.py reads.
+status.json says the copy came from a snapshot, in the shape verify.py reads.
 
-  python3 seed.py <archive>
+  python3 snapshot.py <archive>
 """
 import json, os, sys, tarfile
 from datetime import datetime, timezone
@@ -51,24 +51,24 @@ def main():
             if m.isdir():
                 continue
             if not m.isfile():
-                raise ValueError(f"{m.name}: only regular files may be in a seed")
+                raise ValueError(f"{m.name}: only regular files may be in a snapshot")
             rel = safe_rel(m.name)
             entry = (rel, t.extractfile(m).read())
             (indexes if os.path.basename(rel) in INDEXES else files).append(entry)
     have = {rel.split("/")[0] for rel, _ in indexes}
     if have != set(TREES):
-        raise ValueError(f"the seed must carry an index for both {' and '.join(TREES)}; it has {sorted(have) or 'none'}")
+        raise ValueError(f"the snapshot must carry an index for both {' and '.join(TREES)}; it has {sorted(have) or 'none'}")
     for rel, data in files + indexes:
         write_atomic(os.path.join(DATA, rel), data)
     n = {tree: sum(rel.startswith(tree + "/") for rel, _ in files + indexes) for tree in TREES}
     status = {
         "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "source": "seed",
-        "catalog": {"ok": True, "detail": f"seeded: {n['model-catalog']} files"},
-        "charts": {"ok": True, "detail": f"seeded: {n['helm-charts']} files"},
+        "source": "snapshot",
+        "catalog": {"ok": True, "detail": f"from the snapshot: {n['model-catalog']} files"},
+        "charts": {"ok": True, "detail": f"from the snapshot: {n['helm-charts']} files"},
     }
     write_atomic(os.path.join(DATA, "status.json"), json.dumps(status, indent=1).encode())
-    print(f"seed: {n['model-catalog']} catalog files, {n['helm-charts']} chart files -> {DATA}", flush=True)
+    print(f"snapshot: {n['model-catalog']} catalog files, {n['helm-charts']} chart files -> {DATA}", flush=True)
 
 
 if __name__ == "__main__":

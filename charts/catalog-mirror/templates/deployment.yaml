@@ -1,5 +1,5 @@
-{{- if and (not .Values.sync.enabled) (not .Values.seed.configMap) }}
-{{- fail "sync.enabled is false and seed.configMap is empty: nothing would ever put a copy on the volume" }}
+{{- if and (not .Values.sync.enabled) (not .Values.snapshot.configMap) }}
+{{- fail "sync.enabled is false and snapshot.configMap is empty: nothing would ever put a copy on the volume" }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -21,8 +21,8 @@ spec:
       annotations:
         # A changed sync.py or nginx.conf rolls the pod.
         checksum/files: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- with .Values.seed.checksum }}
-        checksum/seed: {{ . | quote }}
+        {{- with .Values.snapshot.checksum }}
+        checksum/snapshot: {{ . | quote }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -31,18 +31,18 @@ spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.seed.configMap }}
+      {{- if .Values.snapshot.configMap }}
       initContainers:
-        - name: seed
+        - name: snapshot
           image: "{{ .Values.image.python.repository }}:{{ .Values.image.python.tag }}"
           imagePullPolicy: {{ .Values.image.python.pullPolicy }}
-          command: ["python3", "-u", "/files/seed.py", "/seed/{{ .Values.seed.key }}"]
+          command: ["python3", "-u", "/files/snapshot.py", "/snapshot/{{ .Values.snapshot.key }}"]
           env:
             - { name: DATA_DIR, value: /data }
           volumeMounts:
             - { name: data, mountPath: /data }
             - { name: files, mountPath: /files, readOnly: true }
-            - { name: seed, mountPath: /seed, readOnly: true }
+            - { name: snapshot, mountPath: /snapshot, readOnly: true }
           resources: {{- toYaml .Values.resources.sync | nindent 12 }}
       {{- end }}
       containers:
@@ -60,7 +60,7 @@ spec:
             {{- if .Values.sync.enabled }}
             httpGet: { path: /healthz, port: http }
             {{- else }}
-            # No sync container to gate on the indexes, so nginx does: the seed
+            # No sync container to gate on the indexes, so nginx does: the snapshot
             # wrote them last, after every file they name.
             exec:
               command: ["test", "-f", "/data/model-catalog/index.json", "-a", "-f", "/data/helm-charts/index.yaml"]
@@ -109,10 +109,10 @@ spec:
         - name: files
           configMap:
             name: {{ include "catalog-mirror.fullname" . }}-files
-        {{- if .Values.seed.configMap }}
-        - name: seed
+        {{- if .Values.snapshot.configMap }}
+        - name: snapshot
           configMap:
-            name: {{ .Values.seed.configMap }}
+            name: {{ .Values.snapshot.configMap }}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}

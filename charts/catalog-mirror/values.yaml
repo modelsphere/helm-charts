@@ -22,7 +22,7 @@ upstream:
   chartsUrl: https://modelsphere.github.io/helm-charts/
 
 sync:
-  # false: no sync container. The pod serves what `seed` put on the volume and
+  # false: no sync container. The pod serves what `snapshot` put on the volume and
   # nothing ever refreshes it -- for a cluster with no route to upstream at all.
   enabled: true
   # Seconds between rounds. An unchanged upstream costs one conditional request per
@@ -42,10 +42,10 @@ sync:
 # ConfigMap you create (an air-gapped install bundle carries one). An init
 # container unpacks it onto the volume before nginx starts, on every pod start.
 # With sync on as well, the next round moves the copy forward from there.
-seed:
+snapshot:
   configMap: ""
-  key: seed.tar.gz
-  # The ConfigMap is not this chart's, so a new seed does not roll the pod by
+  key: snapshot.tar.gz
+  # The ConfigMap is not this chart's, so a new snapshot does not roll the pod by
   # itself. Pass its sha256 here and it does.
   checksum: ""
 
