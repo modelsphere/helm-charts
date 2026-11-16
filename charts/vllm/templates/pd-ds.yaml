@@ -88,6 +88,25 @@ spec:
           spec:
             {{- include "vllm.podSpec" (dict "root" $root "role" (printf "%s-worker" $roleName) "roleCfg" $roleCfg) | nindent 12 }}
   {{- end }}
+{{- /* Per-role group counts for the routers' wait-upstreams init container.
+       They live here, not inline in the router pod template, so that a
+       pd.prefill/decode.replicas change does not roll every router
+       Deployment: the ConfigMap is read only when a router pod starts, and
+       a running router picks up growth through its drift liveness probe
+       (shrinkage is quarantined by the router itself). Deliberately no
+       checksum annotation on the router template -- that would bring the
+       rollout back. */}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-pd-want
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app: {{ $root.Release.Name }}-vllm
+data:
+  prefill: {{ $pd.prefill.replicas | quote }}
+  decode: {{ $pd.decode.replicas | quote }}
 {{- /* Per-slice headless Services (one per role per slice) and a per-slice
        router. The selector keys off the disaggregatedset.x-k8s.io
        name/role/slice labels, which the DS controller injects into BOTH pod
@@ -216,14 +235,19 @@ spec:
       initContainers:
       - name: wait-upstreams
         image: "{{ include "vllm.pdWaitUpstreamsImage" $root }}"
+        # Counts come from the <fullname>-pd-want ConfigMap, never inlined:
+        # an inlined count makes every replica change a router rollout.
+        env:
+        - name: PF_WANT
+          valueFrom: { configMapKeyRef: { name: {{ $fullname }}-pd-want, key: prefill } }
+        - name: DC_WANT
+          valueFrom: { configMapKeyRef: { name: {{ $fullname }}-pd-want, key: decode } }
         command: ["bash", "-lc"]
         args:
         - |
           set -e
           PF_HL={{ $fullname }}-prefill-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
           DC_HL={{ $fullname }}-decode-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
-          PF_WANT={{ $pd.prefill.replicas }}
-          DC_WANT={{ $pd.decode.replicas }}
           n=1
           while :; do
             PF_HAVE=$(getent hosts "$PF_HL" | awk '{print $1}' | sort -u | wc -l)
