@@ -22,6 +22,9 @@ upstream:
   chartsUrl: https://modelsphere.github.io/helm-charts/
 
 sync:
+  # false: no sync container. The pod serves what `seed` put on the volume and
+  # nothing ever refreshes it -- for a cluster with no route to upstream at all.
+  enabled: true
   # Seconds between rounds. An unchanged upstream costs one conditional request per
   # index (If-None-Match -> 304), so a short interval is cheap.
   intervalSeconds: 300
@@ -33,6 +36,18 @@ sync:
   # Extra environment for the sync container, e.g. HTTPS_PROXY for a cluster that
   # reaches GitHub only through a proxy.
   extraEnv: []
+
+# A copy to start from, made where upstream is reachable: a gzip'd tar of the two
+# trees nginx serves, model-catalog/ and helm-charts/, in binaryData of a
+# ConfigMap you create (an air-gapped install bundle carries one). An init
+# container unpacks it onto the volume before nginx starts, on every pod start.
+# With sync on as well, the next round moves the copy forward from there.
+seed:
+  configMap: ""
+  key: seed.tar.gz
+  # The ConfigMap is not this chart's, so a new seed does not roll the pod by
+  # itself. Pass its sha256 here and it does.
+  checksum: ""
 
 # The copy lives on a volume, so a restarted pod serves the last complete copy at
 # once instead of waiting for a fresh sync. Today it is a few MB.

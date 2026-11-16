@@ -1,3 +1,6 @@
+{{- if and (not .Values.sync.enabled) (not .Values.seed.configMap) }}
+{{- fail "sync.enabled is false and seed.configMap is empty: nothing would ever put a copy on the volume" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,12 +21,29 @@ spec:
       annotations:
         # A changed sync.py or nginx.conf rolls the pod.
         checksum/files: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.seed.checksum }}
+        checksum/seed: {{ . | quote }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.seed.configMap }}
+      initContainers:
+        - name: seed
+          image: "{{ .Values.image.python.repository }}:{{ .Values.image.python.tag }}"
+          imagePullPolicy: {{ .Values.image.python.pullPolicy }}
+          command: ["python3", "-u", "/files/seed.py", "/seed/{{ .Values.seed.key }}"]
+          env:
+            - { name: DATA_DIR, value: /data }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: files, mountPath: /files, readOnly: true }
+            - { name: seed, mountPath: /seed, readOnly: true }
+          resources: {{- toYaml .Values.resources.sync | nindent 12 }}
       {{- end }}
       containers:
         - name: nginx
@@ -37,12 +57,20 @@ spec:
             - { name: data, mountPath: /data, readOnly: true }
             - { name: files, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true }
           readinessProbe:
+            {{- if .Values.sync.enabled }}
             httpGet: { path: /healthz, port: http }
+            {{- else }}
+            # No sync container to gate on the indexes, so nginx does: the seed
+            # wrote them last, after every file they name.
+            exec:
+              command: ["test", "-f", "/data/model-catalog/index.json", "-a", "-f", "/data/helm-charts/index.yaml"]
+            {{- end }}
             periodSeconds: 10
           livenessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 20
           resources: {{- toYaml .Values.resources.nginx | nindent 12 }}
+        {{- if .Values.sync.enabled }}
         - name: sync
           image: "{{ .Values.image.python.repository }}:{{ .Values.image.python.tag }}"
           imagePullPolicy: {{ .Values.image.python.pullPolicy }}
@@ -69,6 +97,7 @@ spec:
               command: ["test", "-f", "/data/model-catalog/index.json", "-a", "-f", "/data/helm-charts/index.yaml"]
             periodSeconds: 10
           resources: {{- toYaml .Values.resources.sync | nindent 12 }}
+        {{- end }}
       volumes:
         - name: data
           {{- if .Values.persistence.enabled }}
@@ -80,6 +109,11 @@ spec:
         - name: files
           configMap:
             name: {{ include "catalog-mirror.fullname" . }}-files
+        {{- if .Values.seed.configMap }}
+        - name: seed
+          configMap:
+            name: {{ .Values.seed.configMap }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}
