@@ -273,10 +273,24 @@ def sync_charts():
     return f"charts: {len(urls)} archives, {got} fetched, {kept} unchanged"
 
 
+def sync_catalog_both():
+    """v1 and v2 are independent copies: one failing must not skip the other,
+    nor hide that the other moved forward."""
+    done, failed = [], []
+    for fn in (sync_catalog, sync_catalog_v2):
+        try:
+            done.append(fn())
+        except Exception as e:  # noqa: BLE001 -- reported below with what did succeed
+            failed.append(f"{fn.__name__}: {e}")
+    if failed:
+        raise RuntimeError("; ".join(failed + [f"done: {d}" for d in done]))
+    return "; ".join(done)
+
+
 def round_once():
     status = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     ok = True
-    for name, fn in (("catalog", lambda: f"{sync_catalog()}; {sync_catalog_v2()}"), ("charts", sync_charts)):
+    for name, fn in (("catalog", sync_catalog_both), ("charts", sync_charts)):
         try:
             msg = fn()
             status[name] = {"ok": True, "detail": msg}

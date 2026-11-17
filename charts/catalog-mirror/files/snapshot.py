@@ -9,11 +9,11 @@ in a ConfigMap. Nothing else may be in the archive.
 The archive is checked whole before anything is written, by the rules sync.py
 follows for upstream, so a broken snapshot fails this init container instead of
 leaving a Ready pod that answers 404s:
-  - model-catalog/index.json and helm-charts/index.yaml are present (they are
-    what readiness looks for);
+  - model-catalog/index.json, model-catalog/index-v2.json (what swiss reads
+    with catalog schema v2) and helm-charts/index.yaml are present;
   - every version file index.json names, and every variant file index-v2.json
-    names (when there is one), is in the archive with the sha256 its index pins;
-    every history it names is there;
+    names, is in the archive with the sha256 its index pins; every history it
+    names is there;
   - index.yaml names its archives by bare file name -- an absolute URL would
     send helm upstream -- and each one is in the archive with a digest the
     index lists.
@@ -27,8 +27,11 @@ belong to the upstream copy the snapshot may just have rewound, and kept, a
 status.json says the copy came from a snapshot, in the shape verify.py reads.
 
   python3 snapshot.py <archive>
-  SNAPSHOT_OPTIONAL=1   a missing archive is not an error (sync is on, and the
-                        snapshot is only where a fresh volume starts from)
+  SNAPSHOT_OPTIONAL=1   sync is on, and the snapshot is only where a fresh volume
+                        starts from. A volume that already holds a mirror is left
+                        alone: sync has kept it current, and the snapshot is older.
+                        A missing or broken snapshot is reported, not fatal: it
+                        must not take down a mirror that sync can fill.
 """
 import hashlib, json, os, re, sys, tarfile
 from datetime import datetime, timezone
@@ -36,7 +39,7 @@ from datetime import datetime, timezone
 DATA = os.environ.get("DATA_DIR", "/data")
 TREES = ("model-catalog", "helm-charts")
 INDEXES = ("index.json", "index-v2.json", "index.yaml")
-REQUIRED = ("model-catalog/index.json", "helm-charts/index.yaml")
+REQUIRED = ("model-catalog/index.json", "model-catalog/index-v2.json", "helm-charts/index.yaml")
 URL_LINE = re.compile(r"^\s*-\s*(\S+\.tgz)\s*$", re.M)
 DIGEST_LINE = re.compile(r"^\s*digest:\s*([0-9a-f]{64})\s*$", re.M)
 
@@ -71,9 +74,20 @@ def check(files):
     if bad:
         return bad
 
+    def under_catalog(rel, what):
+        # The archive's names went through safe_rel, so the index's must too:
+        # "./models/x" and "models//x" name the same file nginx serves.
+        try:
+            return safe_rel(f"model-catalog/{rel}")
+        except ValueError as e:
+            bad.append(f"{what} {rel}: {e}")
+            return None
+
     def pinned(rel, digest, what):
         algo, _, want = (digest or "").partition(":")
-        key = f"model-catalog/{rel}"
+        key = under_catalog(rel, what)
+        if key is None:
+            return
         if algo != "sha256" or not want:
             bad.append(f"{what} {rel}: no sha256 digest in the index")
         elif key not in files:
@@ -84,11 +98,12 @@ def check(files):
     for m in json.loads(files["model-catalog/index.json"]).get("models", []):
         for v in m.get("versions", []):
             pinned(v.get("path", ""), v.get("digest"), "catalog v1")
-    if "model-catalog/index-v2.json" in files:
-        for m in json.loads(files["model-catalog/index-v2.json"]).get("models", []):
-            for v in m.get("variants", []):
-                pinned(v.get("path", ""), v.get("digest"), "catalog v2")
-                if v.get("history") and f"model-catalog/{v['history']}" not in files:
+    for m in json.loads(files["model-catalog/index-v2.json"]).get("models", []):
+        for v in m.get("variants", []):
+            pinned(v.get("path", ""), v.get("digest"), "catalog v2")
+            if v.get("history"):
+                key = under_catalog(v["history"], "catalog v2")
+                if key is not None and key not in files:
                     bad.append(f"catalog v2 {v['history']}: named by the index, not in the archive")
 
     text = files["helm-charts/index.yaml"].decode()
@@ -106,11 +121,7 @@ def check(files):
     return bad
 
 
-def main():
-    archive = sys.argv[1]
-    if not os.path.exists(archive) and os.environ.get("SNAPSHOT_OPTIONAL") == "1":
-        print(f"snapshot: no {archive}; sync will fill the volume", flush=True)
-        return
+def read(archive):
     files = {}
     with tarfile.open(archive, "r:gz") as t:
         for m in t.getmembers():
@@ -119,10 +130,34 @@ def main():
             if not m.isfile():
                 raise ValueError(f"{m.name}: only regular files may be in a snapshot")
             files[safe_rel(m.name)] = t.extractfile(m).read()
-    problems = check(files)
+    return files
+
+
+def main():
+    archive = sys.argv[1]
+    seed_only = os.environ.get("SNAPSHOT_OPTIONAL") == "1"
+    if seed_only and all(os.path.exists(os.path.join(DATA, r)) for r in REQUIRED):
+        # Writing the snapshot here would rewind what sync has moved forward,
+        # and readiness would pass at once on the older copy.
+        print("snapshot: the volume already holds a mirror, which sync keeps current; not applied", flush=True)
+        return
+    if seed_only and not os.path.exists(archive):
+        print(f"snapshot: no {archive} -- if a snapshot was meant to seed this volume, "
+              "check snapshot.key against the ConfigMap's key. Sync will fill the volume.",
+              file=sys.stderr, flush=True)
+        return
+    try:
+        files = read(archive)
+        problems = check(files)
+    except (OSError, EOFError, tarfile.TarError, ValueError, UnicodeDecodeError) as e:
+        problems = [f"{archive}: {e}"]
     if problems:
         for p in problems[:50]:
             print(f"snapshot: {p}", file=sys.stderr)
+        if seed_only:
+            print(f"snapshot: {len(problems)} problem(s), not applied; sync will fill the volume",
+                  file=sys.stderr, flush=True)
+            return
         raise SystemExit(f"snapshot: {len(problems)} problem(s), nothing written")
     order = sorted(files, key=lambda r: os.path.basename(r) in INDEXES)  # indexes last
     for rel in order:

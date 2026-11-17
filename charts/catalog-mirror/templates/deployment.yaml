@@ -68,7 +68,7 @@ spec:
             # No sync container to gate on the indexes, so nginx does: the snapshot
             # wrote them last, after every file they name.
             exec:
-              command: ["test", "-f", "/data/model-catalog/index.json", "-a", "-f", "/data/helm-charts/index.yaml"]
+              command: ["test", "-f", "/data/model-catalog/index.json", "-a", "-f", "/data/model-catalog/index-v2.json", "-a", "-f", "/data/helm-charts/index.yaml"]
             {{- end }}
             periodSeconds: 10
           livenessProbe:
