@@ -512,6 +512,26 @@ entries:
     version: 0.2.0
   catalog-mirror:
   - apiVersion: v2
+    appVersion: 0.2.0
+    created: "2026-11-17T06:22:50.709486036Z"
+    description: In-cluster copy of the model catalog and this helm chart repository,
+      for clusters whose route to GitHub is slow or unreliable; swiss is pointed at
+      it instead of GitHub Pages
+    digest: 0fc9c3d8934011a6cd89a191c2758060aae339cb12ad6afccf7aa1801a7218bf
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - swiss
+    - model-catalog
+    - mirror
+    - helm-repository
+    name: catalog-mirror
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/catalog-mirror-0.2.0/catalog-mirror-0.2.0.tgz
+    version: 0.2.0
+  - apiVersion: v2
     appVersion: 0.1.0
     created: "2026-10-12T06:25:37.652900292Z"
     description: In-cluster copy of the model catalog and this helm chart repository,
@@ -3503,4 +3523,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-11-17T04:38:25.440098522Z"
+generated: "2026-11-17T06:22:50.709690833Z"
