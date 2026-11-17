@@ -533,6 +533,30 @@ entries:
     version: 0.1.0
   console:
   - apiVersion: v2
+    appVersion: 0.2.2
+    created: "2026-11-17T04:38:25.439942097Z"
+    dependencies:
+    - condition: swiss.enabled
+      name: swiss
+      repository: oci://ghcr.io/modelsphere/charts
+      version: 0.7.0
+    description: ModelSphere community portal — identity (users, roles, login) and
+      a federation gateway to Swiss and other backends.
+    digest: a9d3f245014bd2126e292c52aed462ae7e3997f2f6658553402cfbfd62ce4c4e
+    home: https://github.com/modelsphere/console
+    keywords:
+    - console
+    - llm
+    - inference
+    - portal
+    name: console
+    sources:
+    - https://github.com/modelsphere/console
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/console-0.2.2/console-0.2.2.tgz
+    version: 0.2.2
+  - apiVersion: v2
     appVersion: 0.2.1
     created: "2026-10-22T06:11:44.016631519Z"
     dependencies:
@@ -3479,4 +3503,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-11-16T08:40:35.62839769Z"
+generated: "2026-11-17T04:38:25.440098522Z"
