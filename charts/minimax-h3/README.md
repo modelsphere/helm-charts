@@ -476,6 +476,30 @@ and `patch` on `databases.postgresql.cnpg.io` in that namespace.
 
 ## Generic engine values (swiss)
 
+**Upgrade swiss first.** swissd runs helm with its own ServiceAccount, and the swiss chart
+grants only what the charts it deploys render. This chart renders kinds the LLM engine charts
+do not, which swiss charts up to 0.7.4 do not grant:
+
+- a `JobSLORequirement` per pool,
+- the shared asset volume's `PersistentVolumeClaim`,
+- the release's CloudNativePG `Database`, in the Cluster's namespace (when the chart creates
+  one, see [Database](#database)).
+
+Upgrade the swiss chart to a release that grants them before installing or upgrading this chart
+through it; on an older swiss the install fails with `forbidden` on the first of them. With
+swiss's default `rbac.scope: namespaced`, also list the Secret this chart reads with `lookup`,
+which grants swiss that Secret and the `Database` in its namespace:
+
+```yaml
+# swiss values
+rbac:
+  lookupSecrets:
+    - {namespace: middleware, name: cnpg-rw}   # database.fromSecret
+```
+
+That namespace must exist when swiss is installed. A release that sets `database.url` or
+`database.existingSecret` looks nothing up and needs no entry.
+
 The chart accepts the values a generic catalog deploy service such as
 [swiss](https://github.com/modelsphere/swiss) writes, next to its own:
 
