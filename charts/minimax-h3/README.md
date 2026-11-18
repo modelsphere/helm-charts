@@ -485,8 +485,7 @@ do not, which swiss charts up to 0.7.4 do not grant:
 - the release's CloudNativePG `Database`, in the Cluster's namespace (when the chart creates
   one, see [Database](#database)).
 
-Upgrade the swiss chart to a release that grants them before installing or upgrading this chart
-through it; on an older swiss the install fails with `forbidden` on the first of them. With
+Upgrade the swiss chart to 0.7.5 or later before installing or upgrading this chart through it; on an older swiss the install fails with `forbidden` on the first of them. With
 swiss's default `rbac.scope: namespaced`, also list the Secret this chart reads with `lookup`,
 which grants swiss that Secret and the `Database` in its namespace:
 
