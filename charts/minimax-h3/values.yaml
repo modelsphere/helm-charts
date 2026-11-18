@@ -1,9 +1,44 @@
 # MiniMax H3 视频生成:Router + H3 Server + SGLang(sidecar)。
-# 必填:database.url(或 database.fromSecret)。其余默认值可直接起一套,按集群改存储类、模型路径、调度。
+# Defaults run against the modelsphere installer's CloudNativePG cluster (see database);
+# adjust storage class, model path (model.localPath) and scheduling per cluster.
 
 nameOverride: ""
 fullnameOverride: ""
 imagePullSecrets: []
+
+# Release identity. When set it is the default route name (see modelRoute) --
+# a deploy service such as swiss writes it. Empty keeps the legacy route name
+# (modelRoute.route). Scaler and SLO objects are keyed by each pool's
+# Deployment name, not by this, because the decision server resolves the
+# workload by that name.
+serviceId: ""
+
+# Model placement, in the shape a generic catalog engine writes it.
+model:
+  # Served model name. Informational for this chart (H3 has a fixed API).
+  name: ""
+  # Host directory holding the H3 weights. When set, each pool's weights default
+  # to <localPath>/<pools.<pool>.modelSubdir> and the Ref2VA Turbo LoRA to
+  # <localPath>/<pools.ref2va.turbo.lora.subdir>. An explicit
+  # pools.<pool>.sglang.model.hostPath / pools.ref2va.turbo.lora.hostPath still
+  # wins. Empty: /data/models/MiniMax-H3/<modelSubdir> and
+  # /data/models/Minimax-h3-Turbo, as before.
+  localPath: ""
+  # GPUs per pool Pod (string or int). Applies to every pool that does not set
+  # pools.<pool>.sglang.gpuCount itself, and must equal tpSize x ulyssesDegree of
+  # that pool (the render fails otherwise). Empty: sglang.gpuCount.
+  gpus: ""
+  # Extended resource name for the GPUs. Empty: nvidia.com/gpu (or
+  # sglang.gpuResource when set there).
+  gpuResource: ""
+
+# Scheduling defaults for the GPU (pool) Pods. Each applies only when the
+# sglang / pools.<pool>.sglang value of the same name is unset. affinity: a
+# pool-level sglang.affinity replaces it entirely; otherwise sglang.gpuProduct,
+# when set, is ANDed into every required nodeSelectorTerm of this one.
+schedulerName: ""
+priorityClassName: ""
+affinity: {}
 
 # 素材盘:必须 RWX —— 任务可能 A 副本生成、经 Router 从 B 副本下载。
 # size 是配额不是预占;CephFS 可在线扩,但缩不回去。
@@ -16,28 +51,60 @@ sharedStorage:
   size: 500Gi
 
 database:
-  # 留空则从 PG 的 Secret 自动拼(见 fromSecret,name 为空则不拼);两者都拿不到会 fail。
+  # Empty: build the DSN from the PostgreSQL Secret in fromSecret (skipped when its name is
+  # empty); the render fails when neither yields one.
   # helm template 不连集群、lookup 取不到,纯渲染时要显式给。
   url: ""
   # true:本 chart 在自己 ns 建个只装 DSN 的 Secret(Secret 不能跨 ns 引用)
   create: true
   existingSecret: ""
   existingSecretKey: url
+  # Default: the shared CloudNativePG cluster the modelsphere installer creates
+  # (middleware/cnpg). Its bootstrap creates role h3 and keeps the password in
+  # Secret cnpg-rw, named after the read-write Service on purpose so one name
+  # serves as both. Set namespace or name to "" to turn the lookup off.
+  #
+  # lookup needs a live cluster: plain `helm template`, and helm-diff without
+  # --dry-run=server, see nothing -- give database.url or existingSecret there.
+  #
+  # Two releases must not share one database: workers claim any queued task of
+  # their capability, so they would run each other's tasks. So by default each
+  # release gets a database of its own on that cluster: database empty names it
+  # h3_<namespace>_<release>, and createDatabase renders a CloudNativePG Database
+  # in fromSecret.namespace that creates it, owned by user. Its reclaim policy is
+  # retain: uninstalling the release removes the Database object and keeps the
+  # data. Naming a database (such as the bootstrap's minimaxh3) uses that one
+  # as it is and creates nothing; the operator then answers for sharing it.
   fromSecret:
-    namespace: ""
-    name: ""
+    namespace: middleware
+    name: cnpg-rw
+    # Host to connect to. Empty: <name>.<namespace>.svc.cluster.local.
+    host: ""
     passwordKey: password
     user: h3
-    database: minimaxh3
+    # Empty: h3_<namespace>_<release>, created by the Database below.
+    database: ""
     port: 5432
+    # Render the CloudNativePG Database for the per-release name. Off: the
+    # database must already exist.
+    createDatabase: true
+    # The CloudNativePG Cluster (in fromSecret.namespace) the Database is created on.
+    cluster: cnpg
 
 # 两个能力池:各自的模型、并行度、副本数。任务表按 required_capability 分流,共库不串。
 pools:
   fl2va:
     enabled: true
-    replicaCount: 2
+    # Ignored while scaler.enabled: the LLMScaler owns spec.replicas then.
+    replicaCount: 1
+    # Weights directory under model.localPath (or under /data/models/MiniMax-H3
+    # when localPath is empty). sglang.model.hostPath, when set, wins.
+    modelSubdir: FL2VA
+    # Per-pool autoscaling knobs; see scaler / sloRequirement below.
+    scaler: {}
+    sloRequirement: {}
     sglang:
-      model: {hostPath: /data/models/MiniMax-H3/FL2VA}
+      # model.hostPath: <explicit host path, wins over model.localPath>
       # tp4 对齐 ref2va:把权重(含 24GB adaln_proj)摊到 4 卡,每卡基线从 ~65GB 降到 ~48GB,
       # 消除 speed 高水位棘轮顶穿 80GB 的 CUDA OOM(生产 fl2va 16/18 失败根因)。
       # num_gpus = tpSize×ulyssesDegree = 4 不变。原为 {tpSize: 2, ulyssesDegree: 2}。
@@ -45,11 +112,17 @@ pools:
   ref2va:
     enabled: true
     replicaCount: 1
+    modelSubdir: Ref2VA
+    scaler: {}
+    sloRequirement: {}
     # 单个开关同时控制 LoRA 参数、挂载和 Server 采样;关闭即恢复基座请求。
     turbo:
       enabled: true
       lora:
-        hostPath: /data/models/Minimax-h3-Turbo
+        # Explicit host path, wins. Empty: <model.localPath>/<subdir>, or
+        # /data/models/Minimax-h3-Turbo without model.localPath.
+        hostPath: ""
+        subdir: Turbo
         weightName: minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors
         scale: 1.0
         alpha: 8
@@ -59,7 +132,6 @@ pools:
         flowShift: 6.0
         audioFlowShift: 3.0
     sglang:
-      model: {hostPath: /data/models/MiniMax-H3/Ref2VA}
       args: {tpSize: 4, ulyssesDegree: 1}
       # warmup-mode=request、warmup-steps=2 由模板生成,不依赖 extraArgs。
       # v0.5.19 支持参考素材与首尾帧混合条件。
@@ -115,6 +187,9 @@ server:
     # 对外基址,例如 https://h3.example.com 或 https://gw.example.com/minimax-h3。
     # 空 = 按请求头推导。经 openresty 的 modelRoute 对外时 dispatch 会**剥掉** /<modelRoute.route>/
     # 前缀,下载 URL 要靠这里把前缀带回来 —— 尾巴与 modelRoute.route 必须一致。
+    # __ROUTE__ in the value is replaced by the resolved route name, so one
+    # site-wide setting (https://gw.example.com/__ROUTE__) fits every release.
+    # Empty: modelRoute.url, else inferred from the request headers.
     publicBaseUrl: ""
     mediaTimeoutSeconds: 30
     backendTimeoutSeconds: 30
@@ -144,6 +219,8 @@ sglang:
     pullPolicy: IfNotPresent
   service: {port: 30010}
   gpuCount: 4
+  # Empty: model.gpuResource, then nvidia.com/gpu.
+  gpuResource: ""
   args:
     modelType: diffusion
     pipelineClassName: MiniMaxH3Pipeline
@@ -156,7 +233,10 @@ sglang:
   outputSubPath: sglang-output
   model:
     mountPath: /model
-    hostPath: /data/models/MiniMax-H3/FL2VA
+    # Not read for the pools: each pool resolves its own path (see model.localPath
+    # and pools.<pool>.modelSubdir). Set pools.<pool>.sglang.model.hostPath to
+    # pin one explicitly.
+    hostPath: ""
     existingClaim: ""
     subPath: ""
   # /dev/shm,走 emptyDir{medium: Memory},**计入容器内存 limit**
@@ -264,8 +344,24 @@ modelRoute:
   # makes helm delete the old ModelRoute while the old autoconfig still runs, and its finalizer
   # takes the route out of the shared openresty ConfigMap.
   apiGroup: routing.modelsphere.dev
-  # 对外路径前缀,与 server.config.publicBaseUrl 的尾巴必须一致
+  # Route name = external path prefix, resolved as nginx.route -> serviceId ->
+  # this legacy key. It is also the ModelRoute's name. The tail of
+  # server.config.publicBaseUrl must match it (the render checks).
   route: minimax-h3
+  nginx:
+    route: ""
+    # openresty Service and the ConfigMap autoconfig writes routes into, both
+    # "ns/name". The legacy keys openrestyService / outputConfigMap below are
+    # read when these are empty.
+    service: ""
+    outputConfigMap: ""
+    # Alternative to service: a label selector for the openresty Pods.
+    selector: ""
+  # The release's public URL through the gateway (<gateway>/<route>), as a deploy
+  # service writes it. Used as server.config.publicBaseUrl when that is empty;
+  # must end in /<route> like it.
+  url: ""
+  # Legacy spellings of nginx.service / nginx.outputConfigMap.
   openrestyService: ""        # 例如 <ns>/openresty
   outputConfigMap: ""         # 例如 <ns>/openresty-conf
   values:
@@ -294,3 +390,74 @@ modelRoute:
     #   写成别的正则  **替代**默认那条(不是追加)
     # 默认放行下载的理由:content.url 是交给最终用户的,浏览器/播放器不会带
     # Authorization 头,而任务 id 是 UUID,这个 URL 本身相当于一次性凭证。
+
+# LLMScaler (autoscaling.modelsphere.dev/v1alpha1), one per enabled pool, on the
+# Custom provider: the replica count comes from a decision server, which reads
+# each pool's JobSLORequirement (below). Needs the llm-scale operator.
+#
+# While enabled, the operator owns the replica count and pools.<pool>.replicaCount
+# is ignored. The pool Deployments still carry spec.replicas: the live count,
+# read with lookup, so an upgrade leaves it as the operator set it (dropping the
+# field would default it to 1 and kill Pods mid-task); before a Deployment exists,
+# minReplicas. lookup is empty under plain `helm template` or a GitOps render,
+# which therefore writes minReplicas: render those with the scaler off, or set
+# the counts yourself.
+#
+# Each pool may override minReplicas / maxReplicas under pools.<pool>.scaler.
+scaler:
+  enabled: false
+  # Decision server base URL.
+  serverAddress: http://decision-gen.llm-scaler.svc:80
+  serverHeaders: {}
+  # Backstops only; the decision server enforces the SLO's bounds.
+  minReplicas: 1
+  maxReplicas: 200
+  syncPeriodSeconds: 10
+  retryPeriodSeconds: 10
+  deferTimeoutSeconds: 600
+  customProvider:
+    path: /decisions
+    # Empty: the release namespace.
+    namespace: ""
+  scaleDown:
+    behavior: CacheAware
+    maxStepReplicas: 10
+    stabilizationWindowSeconds: 10
+
+# JobSLORequirement (inference.modelsphere.dev/v1alpha1), one per enabled pool:
+# what the decision server scales the pool's LLMScaler by. serviceId is the
+# pool's Deployment name.
+#
+# Every key here can be overridden per pool under pools.<pool>.sloRequirement.
+#
+# maxReplicas empty (the default) renders no maximumDeployment, which the
+# decision server treats as an unmanaged service: enabled + maxReplicas empty =
+# the requirement exists but the pool is NOT scaled. Set maxReplicas (here or per
+# pool) to turn scaling on.
+sloRequirement:
+  enabled: false
+  priority: 10
+  minReplicas: 1
+  maxReplicas: null
+  queue:
+    # Queued and running tasks per replica before the pool gets another one.
+    # Empty: 5 for fl2va and 2 for ref2va (a Ref2VA task runs longer). A value
+    # here applies to both pools; pools.<pool>.sloRequirement.queue.maxDepth wins.
+    maxDepth: null
+    # Backlog of this pool. __SCOPE__ expands to
+    # namespace="<ns>", service="<pool Deployment name>", capability="<pool>",
+    # so two releases in one Prometheus never read each other's queue (service
+    # is the headless Service name, which equals the Deployment name). max by
+    # (status) folds the per-replica copies of one cluster-wide count.
+    # It reads the pool's own Pods, which export only their own capability, so
+    # the render fails with it when serviceMonitor is off (it would read 0) and
+    # when a scaled pool has minReplicas 0 (at 0 replicas nothing reports the
+    # backlog that should scale it back up). A promql of your own lifts both.
+    promql: 'sum(max by(status)(h3_queue_tasks{__SCOPE__, status=~"queued|running"})) or vector(0)'
+  annotations: {}
+
+# Accepted for compatibility with generic catalog engines and not used by this
+# chart: H3 has no CART tier, no KV cache directory and several images of its
+# own (server.image / router.image / sglang.image).
+cart:
+  enabled: false

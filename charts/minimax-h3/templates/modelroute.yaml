@@ -9,8 +9,18 @@
 
   ⚠️ 需要集群里装了 autoconfig(提供 ModelRoute CRD)。没装的环境把 modelRoute.enabled 设为 false。
 */}}
-{{- if not (and .Values.modelRoute.openrestyService .Values.modelRoute.outputConfigMap) }}
-{{- fail "modelRoute.enabled=true needs modelRoute.openrestyService and modelRoute.outputConfigMap (ns/name of the openresty Service and the ConfigMap autoconfig writes routes into)" }}
+{{- /* nginx.* is the spelling generic catalog engines (and the sglang chart) use;
+       openrestyService / outputConfigMap are this chart's older keys, still read. */}}
+{{- $mr := .Values.modelRoute }}
+{{- $ng := default (dict) $mr.nginx }}
+{{- $route := include "minimax-h3.route" . }}
+{{- $svc := $ng.service | default $mr.openrestyService }}
+{{- $cm := $ng.outputConfigMap | default $mr.outputConfigMap }}
+{{- if not $cm }}
+{{- fail "modelRoute.enabled=true needs modelRoute.nginx.outputConfigMap (legacy: modelRoute.outputConfigMap), the ns/name of the ConfigMap autoconfig writes routes into" }}
+{{- end }}
+{{- if not (or $svc $ng.selector) }}
+{{- fail "modelRoute.enabled=true needs modelRoute.nginx.service (legacy: modelRoute.openrestyService), the ns/name of the openresty Service, or modelRoute.nginx.selector" }}
 {{- end }}
 {{- $groups := list "routing.gpucluster.io" "routing.modelsphere.dev" }}
 {{- if not (has .Values.modelRoute.apiGroup $groups) }}
@@ -23,7 +33,7 @@
 apiVersion: {{ .Values.modelRoute.apiGroup }}/v1alpha1
 kind: ModelRoute
 metadata:
-  name: {{ .Values.modelRoute.route }}
+  name: {{ $route }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "minimax-h3.labels" . | nindent 4 }}
@@ -45,9 +55,13 @@ spec:
   nginx:
     # 对外路径前缀:https://<域名>/<route>/v2/...
     # dispatch 会**剥掉**这个前缀再转给后端,所以下载 URL 要靠 server.config.publicBaseUrl 带回来
-    route: {{ .Values.modelRoute.route }}
-    service: {{ .Values.modelRoute.openrestyService }}
-    outputConfigMap: {{ .Values.modelRoute.outputConfigMap }}
+    route: {{ $route }}
+    {{- if $svc }}
+    service: {{ $svc }}
+    {{- else }}
+    selector: {{ $ng.selector | quote }}
+    {{- end }}
+    outputConfigMap: {{ $cm }}
     # 只用 backend-svc(Service 的 ClusterIP VIP),不列 pod IP:
     #   * 负载均衡与健康感知交给 k8s,纯反代不需要 nginx 自己轮询;
     #   * Router 扩缩/滚动时 conf 内容不变 -> **不触发 openresty reload**
