@@ -1066,30 +1066,33 @@ tolerations:
   Emits startupProbe and readinessProbe back-to-back at the caller's
   indent. startupProbe carries the engines' 90-minute load budget so a
   router pod scheduled before its engines have loaded is not
-  liveness-restarted. readinessProbe ticks at 30s because each call
-  costs an engine, even a shallow one -- the engines' own probes can
-  afford 10s because the kubelet runs them; doubling the cadence by
-  stacking a router copy on top is money for no signal.
+  liveness-restarted. readinessProbe ticks at 5s (plus a preStop draining
+  sentinel check) so a restarting router flips NotReady within <=10s before
+  taking SIGTERM and recovers in ~5s after restart.
 */ -}}
 {{- define "sglang.pdRouterProbes" -}}
 {{- $roles := .roles -}}
 startupProbe:
   exec:
     command: ["bash", "-lc", {{ include "sglang.pdRouterProbeScript" (dict "roles" $roles) | quote }}]
-  periodSeconds: 30
+  periodSeconds: 5
   timeoutSeconds: 10
-  failureThreshold: 180           # 180 x 30s = 90 minutes -- the engines' load budget
+  failureThreshold: 1080          # 1080 x 5s = 90 minutes -- the engines' load budget
 readinessProbe:
   exec:
     command: ["bash", "-lc", {{ include "sglang.pdRouterProbeScript" (dict "roles" $roles) | quote }}]
-  periodSeconds: 30
+  periodSeconds: 5
   timeoutSeconds: 5
-  failureThreshold: 3
+  failureThreshold: 2
 {{- end -}}
 
 {{- define "sglang.pdRouterProbeScript" -}}
 {{- $roles := .roles -}}
 set -u
+if [ -f /tmp/pd-router/draining ]; then
+  echo "router not ready: draining" >&2
+  exit 1
+fi
 check() {
   local src=$1 port=$2 path=$3
   # A name (any non-numeric character in src) -> resolve via DNS and try each.
@@ -1141,9 +1144,10 @@ exit 0
 {{- define "sglang.pdRouterLivenessProbe" -}}
 {{- $roles := .roles -}}
 {{- $root := .root -}}
+{{- $peer := .peer -}}
 livenessProbe:
   exec:
-    command: ["bash", "-lc", {{ include "sglang.pdRouterLivenessProbeScript" (dict "root" $root "roles" $roles) | quote }}]
+    command: ["bash", "-lc", {{ include "sglang.pdRouterLivenessProbeScript" (dict "root" $root "roles" $roles "peer" $peer) | quote }}]
   periodSeconds: 10
   timeoutSeconds: 10
   failureThreshold: 2
@@ -1294,6 +1298,59 @@ res_{{ $role }}=$(resolve {{ $target.host | quote }}); [ -n "$res_{{ $role }}" ]
 {{- if ne $role "router" }}{{/* the router itself, not an upstream: nothing to drift-check */}}
 check {{ $role | quote }} {{ $target.host | quote }} {{ $role }}-ips {{ $target.port | quote }} {{ required (printf "pd router liveness target %s needs a path" $role) $target.path | quote }} "$res_{{ $role }}"
 {{- end }}
+{{- end }}
+{{- with .peer }}
+# Multi-replica router stagger: never take the last Ready router down and
+# never let two replicas restart on the same tick. Only runs when drift
+# actually wants a restart (rc != 0); steady state costs zero extra lookups.
+if [ "$rc" -ne 0 ]; then
+  my_ip="${POD_IP:-}"
+  if [ -z "$my_ip" ]; then
+    echo "router stagger: POD_IP unset; holding restart" >&2
+    rc=0
+  else
+    peers=$(resolve {{ .host | quote }})
+    peer_count=0
+    my_idx=-1
+    other_ready=0
+    while read -r p; do
+      [ -n "$p" ] || continue
+      if [ "$p" = "$my_ip" ]; then
+        my_idx=$peer_count
+      fi
+      peer_count=$((peer_count + 1))
+    done <<<"$peers"
+    if [ "$peer_count" -lt 2 ] || [ "$my_idx" -lt 0 ]; then
+      echo "router stagger: waiting for peer readiness (ready=$peer_count, self_idx=$my_idx)" >&2
+      rc=0
+    else
+      # 90s turn per sorted peer IP, active trigger window [0, 60).
+      # The 30s guard band [60, 90) exceeds preStop readiness flip (<=10s)
+      # plus CoreDNS TTL (5s), so a pod that trips near t=59s is out of
+      # Ready DNS before the next peer's slot opens at t=90s.
+      now=$(date +%s)
+      slot=$(( (now / 90) % peer_count ))
+      pos=$(( now % 90 ))
+      if [ "$slot" -ne "$my_idx" ] || [ "$pos" -ge 60 ]; then
+        echo "router stagger: waiting for turn (idx=$my_idx/$peer_count, slot=$slot, pos=${pos}s)" >&2
+        rc=0
+      else
+        while read -r p; do
+          [ -n "$p" ] || continue
+          [ "$p" = "$my_ip" ] && continue
+          if serving "$p" {{ .port | quote }} {{ .path | quote }}; then
+            other_ready=1
+            break
+          fi
+        done <<<"$peers"
+        if [ "$other_ready" -ne 1 ]; then
+          echo "router stagger: no peer answering /readiness; holding restart" >&2
+          rc=0
+        fi
+      fi
+    fi
+  fi
+fi
 {{- end }}
 exit $rc
 {{- end -}}

@@ -296,8 +296,9 @@ pd:
   router:
     # A/B only. In colocate there is exactly one router CONTAINER per
     # merged pod; this replicas is the per-slice router Deployment count
-    # (vllm-router has no in-image HA either -- keep it at 1).
-    replicas: 1
+    # (default 2, capped at 2 -- the second pod + peer-gated staggered drift
+    # restarts + preStop draining keep the slice serving through P/D scaling).
+    replicas: 2
     # Forwarded verbatim as --policy. The Rust vllm-router accepts
     # round_robin today; there is no cache_aware.
     policy: round_robin
@@ -327,11 +328,11 @@ pd:
     affinityReplace: null
     tolerationsReplace: null
     # Readiness. In both pd shapes the router container carries an exec
-    # startupProbe (180x30s = 90 minutes, matching the engines' load
-    # budget) + readinessProbe (30x5x3) that curls the engines' own
-    # /health -- prefill AND decode, direct, never through the router's
-    # own port. Only when both roles answer does the router read Ready,
-    # join the EndpointSlice and let traffic through. Without it the
+    # startupProbe (1080x5s = 90 minutes, matching the engines' load
+    # budget) + readinessProbe (5x5x2, plus a preStop draining sentinel) that
+    # curls the engines' own /health -- prefill AND decode, direct, never
+    # through the router's own port. Only when both roles answer does the router
+    # read Ready, join the EndpointSlice and let traffic through. Without it the
     # router would land in the Service as soon as its port opened --
     # before any engine exists -- and CART would 5xx user requests
     # instead of waiting.

@@ -215,3 +215,92 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].args[0]
           pattern: 'seq 1 60|exit 1'
+
+  - it: pd-ds defaults to 2 router replicas with preStop drain, fast probes, 540s shutdown grace, and staggered peer liveness
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--shutdown-grace-period-secs 540'
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].startupProbe.periodSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].startupProbe.failureThreshold
+          value: 1080
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.periodSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.failureThreshold
+          value: 2
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.exec.command[2]
+          pattern: '/tmp/pd-router/draining'
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].lifecycle.preStop.exec.command[2]
+          value: "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep 20"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: 'ci-router-hl-s0\.ci\.svc\.cluster\.local\.'
+
+  - it: pd-ds renders a Ready-only headless Service for router peers
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-hl-s0
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.clusterIP
+          value: None
+      - equal:
+          path: spec.publishNotReadyAddresses
+          value: false
+      - equal:
+          path: spec.selector
+          value:
+            app: ci-sglang
+            component: router
+            slice: "0"
+
+  - it: pd-ds with pd.router.replicas=1 skips peer stagger in livenessProbe
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      pd.router.replicas: 1
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: 'ci-router-hl-s0'
+
+  - it: pd-ds renders a minAvailable=1 router PDB by default
+    template: templates/pdb.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.minAvailable
+          value: 1
