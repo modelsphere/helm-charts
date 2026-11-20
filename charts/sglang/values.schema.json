@@ -450,6 +450,11 @@
       "items": { "type": ["string", "integer", "number", "boolean"] }
     },
 
+    "extraInitShell": {
+      "description": "Bash block spliced into the pod's command between `ulimit` and `exec sglang serve`. Wraps single-node pods in bash -lc when non-empty. Anything exported here is visible when ${LWS_LEADER_ADDRESS}, ${LWS_WORKER_INDEX}, and ${NCCL_IB_HCA} expand. Rejected under commandOverride.",
+      "type": "string"
+    },
+
     "service": {
       "type": "object",
       "additionalProperties": false,

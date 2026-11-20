@@ -38,13 +38,21 @@ replicaCount: 1
 # GROUP (lws.size pods: one leader + workers) is the unit that loads the model,
 # scales and restarts. Requires the LWS controller.
 #
-# vLLM's own multi-node mode, no Ray: the leader runs `vllm serve` with the API
-# server, every worker runs `vllm serve --headless` (GPU workers only), and the
-# multiprocessing executor spans the nodes. --nnodes, --node-rank,
-# --master-addr, --master-port, --distributed-executor-backend=mp and
-# --headless are derived from the group; the parallelism layout goes in
-# extraArgs, and must add up: tensor-parallel-size x pipeline-parallel-size =
+# In `mp` mode (the default), vLLM runs its own multi-node multiprocessing
+# executor without Ray: the leader runs `vllm serve` with the API server, every
+# worker runs `vllm serve --headless` (GPU workers only), and --nnodes,
+# --node-rank, --master-addr, --master-port, --distributed-executor-backend=mp
+# and --headless are derived from the group; the parallelism layout goes in
+# extraArgs and must add up: tensor-parallel-size x pipeline-parallel-size =
 # lws.size x model.gpus (model.gpus is per POD).
+#
+# In `dp` mode (`lws.mode: dp`), each pod hosts local data-parallel rank(s)
+# (e.g. TP8 intra-node, DP across nodes) using vLLM's headless DP coordinator:
+# --data-parallel-size, --data-parallel-size-local, --data-parallel-rpc-port
+# (from lws.distPort) and --data-parallel-address are derived on every pod,
+# --api-server-count on the leader, and --headless + --data-parallel-start-rank
+# on workers. Set lws.distPort to the DP RPC port (e.g. 13399) so waitForLeader
+# probes the port the leader actually binds.
 #
 # The rest of the chart carries over: the Service narrows to role: leader and is
 # renamed <fullname>-leader (the LWS controller owns a headless Service called
@@ -87,9 +95,14 @@ replicaCount: 1
 #     dealt with. No chart setting reaches that.
 lws:
   enabled: false
-  size: 2                                   # pods per group, leader included = --nnodes
+  size: 2                                   # pods per group, leader included (= --nnodes in mp mode)
   replicas: 1                               # GROUPS, not pods; omitted when the scaler owns it
-  distPort: 29500                           # --master-port: rendezvous, pod-to-pod inside the group
+  distPort: 29500                           # --master-port (mp) or --data-parallel-rpc-port (dp); wait-leader probes this port
+  mode: mp                                  # mp | dp -- multi-node coordination mode
+  dataParallel:
+    sizeLocal: 1                            # --data-parallel-size-local (per pod); total --data-parallel-size = group size x sizeLocal
+    apiServerCount: 1                       # --api-server-count on the leader; 0 or null omits the flag
+    resolveLeaderAddress: true              # resolve ${LWS_LEADER_ADDRESS} DNS name to an IP before passing --data-parallel-address
   startupPolicy: LeaderCreated
   restartPolicy: RecreateGroupOnPodRestart
   subdomainPolicy: Shared                   # Shared | UniquePerReplica
@@ -508,8 +521,11 @@ modelCheck:
 #
 # Under lws.enabled this is also where the parallelism layout goes
 # (--tensor-parallel-size / --pipeline-parallel-size); the flags the group
-# derives (--nnodes, --node-rank, --master-addr, --master-port, --headless,
-# --distributed-executor-backend) are rejected here.
+# derives (mp: --nnodes, --node-rank, --master-addr, --master-port, --headless,
+# --distributed-executor-backend; dp: --data-parallel-size,
+# --data-parallel-size-local, --data-parallel-address, --data-parallel-rpc-port,
+# --data-parallel-start-rank, --headless, and --api-server-count when > 0) are
+# rejected here.
 #
 # vLLM fills usage.prompt_tokens_details.cached_tokens only when this flag is on;
 # without it the field is absent from every response. The gateway's request log
@@ -542,15 +558,15 @@ extraArgs: []
 # which no container can exec.
 commandOverride:
 
-# extraInitShell is a bash block inserted verbatim into the multi-node
-# (lws/pd) pod's command between `ulimit` and `exec vllm serve`. It is the
-# only way to run arbitrary per-pod shell without commandOverride -- and so
-# the only way to run shell while still inheriting the chart's flag wiring
-# (--nnodes, --node-rank, --master-addr, NixlConnector JSON). Anything
-# exported here lands in the environment that the chart's own
-# ${LWS_LEADER_ADDRESS}/${LWS_WORKER_INDEX} expand against, so an
-# extraInitShell that rewrites those exports (e.g. resolves the leader DNS
-# name to an IP) propagates into the vLLM flags.
+# extraInitShell is a bash block inserted verbatim into the pod's command
+# between `ulimit` and `exec vllm serve`. It is the only way to run arbitrary
+# per-pod shell without commandOverride -- and so the only way to run shell
+# while still inheriting the chart's flag wiring (--nnodes, --node-rank,
+# --master-addr, --data-parallel-*, NixlConnector JSON). Anything exported here
+# lands in the environment that the chart's ${LWS_LEADER_ADDRESS},
+# ${LWS_WORKER_INDEX}, and ${DP_LEADER_ADDR} expand against, so an
+# extraInitShell that rewrites ${LWS_LEADER_ADDRESS} (or sets ${DP_LEADER_ADDR}
+# directly in dp mode) propagates into the vLLM flags.
 #
 # The canonical use-case is the hostNetwork + multi-node Gloo bootstrap:
 # /etc/hosts maps the pod's own hostname to 127.0.1.1, so torch.distributed's
@@ -559,8 +575,10 @@ commandOverride:
 # the NIC name alone cannot predict per host. See test-yamls/chart/
 # g-ds-size2.yaml for the working loop.
 #
-# Only runs on multi-node (lws.enabled, lws.size>1, or pd.roles). Single-pod
-# exec form has no shell to splice into -- use commandOverride instead.
+# On single-node pods (`lws.enabled: false` and `pd.enabled: false`), an empty
+# value keeps the exec form `["vllm", "serve"]`; a non-empty block wraps the
+# command in `bash -lc` so the init shell runs before `exec vllm serve`.
+# Rejected when commandOverride is set (which replaces the wrapper completely).
 extraInitShell: ""
 
 service:
