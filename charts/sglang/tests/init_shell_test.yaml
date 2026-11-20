@@ -1,0 +1,90 @@
+# extraInitShell across single-node, LWS, and PD shapes.
+suite: extraInitShell
+release:
+  name: ci
+set:
+  modelRoute.nginx.outputConfigMap: ci/openresty-conf
+tests:
+  - it: single-node keeps exec form when extraInitShell is empty or whitespace
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      extraInitShell: "  \n "
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "sglang")].command
+          value: ["sglang", "serve"]
+
+  - it: single-node wraps in bash -lc when extraInitShell is non-empty
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      cache.enabled: true
+      extraInitShell: |
+        if [ -f /usr/lib/aarch64-linux-gnu/libjemalloc.so.2 ]; then
+          export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2
+        fi
+      extraArgs:
+        - "--tp=2"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "sglang")].command
+          value: ["bash", "-lc"]
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args[0]
+          pattern: "ulimit -l unlimited"
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args[0]
+          pattern: "export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc\\.so\\.2"
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args[0]
+          pattern: 'exec python3 /opt/sglang-cache/cache_manager\.py -- \\\n\s+sglang serve'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "sglang")].args[0]
+          pattern: "'--tp=2'"
+
+  - it: lws leader and worker splice extraInitShell before exec sglang serve
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      extraInitShell: |
+        export GLOO_SOCKET_IFNAME=bond1
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "sglang")].args[0]
+          pattern: "export GLOO_SOCKET_IFNAME=bond1\nexec sglang serve"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "sglang")].args[0]
+          pattern: "export GLOO_SOCKET_IFNAME=bond1\nexec sglang serve"
+
+  - it: pd splices extraInitShell before MOONCAKE_IB_DEVICE export
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    set:
+      scaler.enabled: false
+      pd.enabled: true
+      rdma.enabled: true
+      pd.prefill.gpus: 1
+      pd.decode.gpus: 1
+      extraInitShell: |
+        export NCCL_IB_HCA=mlx5_0
+    asserts:
+      - matchRegex:
+          path: spec.roles[?(@.name == "prefill")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "sglang")].args[0]
+          pattern: 'export NCCL_IB_HCA=mlx5_0[\s\S]*export MOONCAKE_IB_DEVICE="\$\{NCCL_IB_HCA\}"'
+
+  - it: rejects commandOverride combined with non-empty extraInitShell
+    template: templates/deployment.yaml
+    set:
+      commandOverride: ["sleep", "inf"]
+      extraInitShell: "export FOO=1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraInitShell is set, but commandOverride replaces"

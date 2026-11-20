@@ -309,3 +309,34 @@
 {{- $img := .Values.pd.router.waitUpstreamsImage | default dict -}}
 {{ $img.repository | default "debian" }}:{{ $img.tag | default "12-slim" }}
 {{- end -}}
+
+{{/*
+  Reject extraArgs entries that restate flags the chart derives for a
+  multi-node group (vLLM takes the last occurrence of a repeated flag).
+  Takes dict "root" $ "args" <list> "label" <string>.
+*/}}
+{{- define "vllm.checkDerivedExtraArgs" -}}
+{{- $lws := .root.Values.lws -}}
+{{- $mode := $lws.mode | default "mp" -}}
+{{- $derived := list "--nnodes" "--node-rank" "--master-addr" "--master-port" "--headless" "--distributed-executor-backend" -}}
+{{- if eq $mode "dp" -}}
+  {{- $derived = list "--data-parallel-size" "--data-parallel-size-local" "--data-parallel-address" "--data-parallel-rpc-port" "--data-parallel-start-rank" "--headless" -}}
+  {{- $dp := $lws.dataParallel | default dict -}}
+  {{- $apiCount := 1 -}}
+  {{- if and (hasKey $dp "apiServerCount") (not (kindIs "invalid" $dp.apiServerCount)) -}}
+    {{- $apiCount = int $dp.apiServerCount -}}
+  {{- end -}}
+  {{- if gt $apiCount 0 -}}
+    {{- $derived = append $derived "--api-server-count" -}}
+  {{- end -}}
+{{- end -}}
+{{- $label := .label -}}
+{{- range $arg := (.args | default list) -}}
+  {{- $a := toString $arg -}}
+  {{- range $flag := $derived -}}
+    {{- if or (eq $a $flag) (hasPrefix (printf "%s=" $flag) $a) (hasPrefix (printf "%s " $flag) $a) -}}
+      {{- fail (printf "vllm: %s carries %q, which multi-node (%s mode) already derives per pod. vLLM takes the LAST occurrence of a repeated flag, so this would override the per-pod value. Drop it." $label $arg $mode) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}

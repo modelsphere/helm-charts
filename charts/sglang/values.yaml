@@ -482,6 +482,20 @@ extraArgs: []
 # which no container can exec.
 commandOverride:
 
+# extraInitShell is a bash block inserted verbatim into the pod's command
+# between `ulimit` and `exec sglang serve`. It is the only way to run arbitrary
+# per-pod shell without commandOverride -- and so the only way to run shell
+# while still inheriting the chart's flag wiring (--nnodes, --node-rank,
+# --dist-init-addr, --disaggregation-ib-device). Anything exported here lands
+# in the environment that ${LWS_LEADER_ADDRESS}, ${LWS_WORKER_INDEX}, and
+# ${NCCL_IB_HCA} expand against.
+#
+# On single-node pods (`lws.enabled: false` and `pd.enabled: false`), an empty
+# value keeps the exec form `["sglang", "serve"]`; a non-empty block wraps the
+# command in `bash -lc` so the init shell runs before `exec sglang serve`.
+# Rejected when commandOverride is set (which replaces the wrapper completely).
+extraInitShell: ""
+
 service:
   type: ClusterIP
   # The inference and /metrics port. Threaded through the container port, the
