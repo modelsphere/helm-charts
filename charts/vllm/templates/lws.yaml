@@ -25,17 +25,11 @@
 {{- end }}
 
 {{- /* Not a style objection: a duplicate wins by being last on vLLM's command
-       line, so an extraArgs --node-rank would override the per-pod rank the
-       chart just derived and silently give every pod in the group the same one.
-       --headless is here too: on the leader it would take down the only API
-       server in the group. */}}
-{{- range $arg := .Values.extraArgs }}
-{{- range $derived := list "--nnodes" "--node-rank" "--master-addr" "--master-port" "--headless" "--distributed-executor-backend" }}
-{{- if hasPrefix $derived (toString $arg) }}
-{{- fail (printf "vllm: extraArgs carries %q, which lws.enabled already derives from the group (nnodes=lws.size, node-rank per pod, master-addr/port from the leader, --headless on workers, the mp executor). vLLM takes the LAST occurrence of a repeated flag, so this would override the per-pod value -- give every pod rank 0, say. Drop it; put only the parallelism layout (--tensor-parallel-size, --pipeline-parallel-size, ...) in extraArgs" $arg) }}
-{{- end }}
-{{- end }}
-{{- end }}
+       line, so an extraArgs --node-rank or --data-parallel-start-rank would
+       override the per-pod value the chart derived and silently give every pod
+       in the group the same one. --headless is here too: on the leader it
+       would take down the only API server in the group. */}}
+{{- include "vllm.checkDerivedExtraArgs" (dict "root" . "args" .Values.extraArgs "label" "extraArgs") }}
 apiVersion: leaderworkerset.x-k8s.io/v1
 kind: LeaderWorkerSet
 metadata:
