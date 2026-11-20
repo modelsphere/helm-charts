@@ -154,6 +154,26 @@ spec:
   ports:
   - { name: http-decode, port: {{ $pd.decode.httpPort | default 30002 }}, targetPort: http-decode }
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-router-hl-s{{ $s }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app: {{ $root.Release.Name }}-sglang
+spec:
+  clusterIP: None
+  # Deliberately false: the drift liveness stagger uses this Service to count
+  # Ready, non-Terminating router peers in this slice.
+  publishNotReadyAddresses: false
+  selector:
+    app: {{ $root.Release.Name }}-sglang
+    component: router
+    slice: "{{ $s }}"
+  ports:
+  - { name: http, port: {{ $root.Values.service.port }}, targetPort: http }
+{{- $routerReplicas := int ($pd.router.replicas | default 2) }}
+---
 # Router for slice {{ $s }}: resolves this slice's two headless Services into
 # repeated --prefill / --decode flags, so the router sees every group leader of
 # THIS slice. One router per slice is the PD unit's front door.
@@ -165,7 +185,7 @@ metadata:
   labels:
     app: {{ $root.Release.Name }}-sglang
 spec:
-  replicas: {{ $pd.router.replicas | default 1 }}
+  replicas: {{ $routerReplicas }}
   # Reuse the top-level value: the router pod's "no progress" window now has to
   # cover the engine placement window too, because its init container blocks
   # on the engines being scheduled. The default 7200 (hours) is the natural
@@ -391,6 +411,7 @@ spec:
           echo "router: slice {{ $s }} resolved prefill: ${PF_IPS:-none}" >&2
           echo "router: slice {{ $s }} resolved decode:  ${DC_IPS:-none}" >&2
           mkdir -p /tmp/pd-router            # smg image has USER smg (uid 65532); /run is root-owned
+          rm -f /tmp/pd-router/draining
           write_role_snapshot() {
             # usage: write_role_snapshot <role> <hl-fqdn> <ips>
             #
@@ -431,6 +452,7 @@ spec:
             $PF_ARGS $DC_ARGS \
             --policy {{ $pd.router.policy | default "cache_aware" }} \
             --model-path {{ $root.Values.model.mountPath }} \
+            --shutdown-grace-period-secs 540 \
             --host 0.0.0.0 \
             --port {{ $root.Values.service.port }}
           done
@@ -455,12 +477,23 @@ spec:
         {{- include "sglang.pdRouterProbes" (dict "roles" $probeRoles) | nindent 8 }}
         {{- /* Drift liveness: restart the router if a new prefill/decode IP
                appears in DNS after boot -- argv is immutable and the running
-               router can never learn about post-boot upstreams. */}}
-        {{- include "sglang.pdRouterLivenessProbe" (dict "root" $root "roles" $probeRoles) | nindent 8 }}
+               router can never learn about post-boot upstreams. When running
+               >= 2 router replicas, gate restarts behind a peer-readiness
+               stagger so the slice stays online. */}}
+        {{- $livenessArgs := dict "root" $root "roles" $probeRoles }}
+        {{- if ge $routerReplicas 2 }}
+        {{- $_ := set $livenessArgs "peer" (dict "host" (printf "%s-router-hl-s%d.%s.svc.cluster.local." $fullname $s $root.Release.Namespace) "port" $root.Values.service.port "path" "/readiness") }}
+        {{- end }}
+        {{- include "sglang.pdRouterLivenessProbe" $livenessArgs | nindent 8 }}
+        lifecycle:
+          preStop:
+            exec:
+              command: ["bash", "-lc", "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep 20"]
         ports:
         - { containerPort: {{ $root.Values.service.port }}, name: http }
+        {{- $routerEnv := list (dict "name" "POD_IP" "valueFrom" (dict "fieldRef" (dict "fieldPath" "status.podIP"))) }}
         env:
-        {{- include "sglang.mergeEnv" (dict "chart" list "user" $root.Values.env "padding" 10) }}
+        {{- include "sglang.mergeEnv" (dict "chart" $routerEnv "user" $root.Values.env "padding" 10) }}
         volumeMounts:
         - name: model-storage
           mountPath: {{ $root.Values.model.mountPath }}

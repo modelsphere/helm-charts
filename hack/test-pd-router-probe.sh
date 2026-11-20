@@ -42,10 +42,15 @@ cat >/dev/null              # live_id(): python3 - <ip> <port> <<heredoc
 [ -f "$W/id/\$2" ] || exit 2
 cat "$W/id/\$2"
 EOF
-chmod +x "$W/bin/getent" "$W/bin/python3"
+cat >"$W/bin/date" <<EOF
+#!/usr/bin/env bash
+cat "$W/now"
+EOF
+chmod +x "$W/bin/getent" "$W/bin/python3" "$W/bin/date"
 
 PF=ci-prefill-hl-s0.ci.svc.cluster.local.
 DC=ci-decode-hl-s0.ci.svc.cluster.local.
+ROUTER_HL=ci-router-hl-s0.ci.svc.cluster.local.
 VALUES=(-n ci --set modelRoute.nginx.outputConfigMap=ci/openresty-conf
   --set pd.enabled=true --set rdma.enabled=true --set scaler.enabled=false
   --set pd.prefill.gpus=4 --set pd.decode.gpus=4)
@@ -79,22 +84,35 @@ reset() {
   echo '0|t1' >"$W/id/10.0.0.1"; echo '0|t2' >"$W/id/10.0.0.2"; echo '0|t9' >"$W/id/10.0.0.9"
 }
 fail=0
-# expect <script> <want-rc> <case>
-expect() {
-  local out rc
-  out=$(PATH="$W/bin:$PATH" bash "$1" 2>&1); rc=$?
-  if [ "$rc" -eq "$2" ]; then
-    printf 'ok    %-58s %s\n' "$3" "$(tr '\n' ' ' <<<"$out")"
+# expect_as <pod_ip|-> <script> <want-rc> <case>
+expect_as() {
+  local pod_ip=$1 script=$2 want=$3 label=$4 out rc
+  if [ "$pod_ip" = "-" ]; then
+    out=$(env -u POD_IP PATH="$W/bin:$PATH" bash "$script" 2>&1); rc=$?
   else
-    printf 'FAIL  %-58s rc=%d want=%d %s\n' "$3" "$rc" "$2" "$(tr '\n' ' ' <<<"$out")"
+    out=$(POD_IP="$pod_ip" PATH="$W/bin:$PATH" bash "$script" 2>&1); rc=$?
+  fi
+  if [ "$rc" -eq "$want" ]; then
+    printf 'ok    %-58s %s\n' "$label" "$(tr '\n' ' ' <<<"$out")"
+  else
+    printf 'FAIL  %-58s rc=%d want=%d %s\n' "$label" "$rc" "$want" "$(tr '\n' ' ' <<<"$out")"
     fail=1
   fi
 }
+expect() { expect_as "-" "$@"; }
 dead() { rm -f "$W/serving/$1" "$W/id/$1"; }
+# Steady 2-replica routers: .20 (idx 0) and .21 (idx 1), plus a dead prefill .2 (shrink drift).
+drift_2r() {
+  reset
+  echo 10.0.0.1 >"$W/dns/$PF"; dead 10.0.0.2
+  printf '10.0.0.20\n10.0.0.21\n' >"$W/dns/$ROUTER_HL"
+  touch "$W/serving/10.0.0.20" "$W/serving/10.0.0.21"
+  echo 10 >"$W/now"
+}
 
 for chart in "$@"; do
   echo "== $chart"
-  P="$W/probe.sh"; render "$chart" "$P" || { echo "FAIL  $chart does not render" >&2; fail=1; continue; }
+  P="$W/probe.sh"; render "$chart" "$P" --set pd.router.replicas=1 || { echo "FAIL  $chart does not render" >&2; fail=1; continue; }
 
   reset;                                                     expect "$P" 0 "steady state"
   reset; rm "$W/state/prefill-ips" "$W/state/decode-ips";    expect "$P" 0 "no snapshot yet (booting)"
@@ -122,8 +140,26 @@ for chart in "$@"; do
 
   # Without hang-watcher there is no identity: shrink still works on "down",
   # a reused address that serves cannot be told from the original engine.
-  render "$chart" "$P" --set hangWatcher.enabled=false || { fail=1; continue; }
+  render "$chart" "$P" --set pd.router.replicas=1 --set hangWatcher.enabled=false || { fail=1; continue; }
   reset; echo 10.0.0.1 >"$W/dns/$PF";                        expect "$P" 0 "no hang-watcher: DNS flicker, engine alive"
   reset; echo 10.0.0.1 >"$W/dns/$PF"; dead 10.0.0.2;         expect "$P" 1 "no hang-watcher: scale-down"
+
+  # Multi-replica (default pd.router.replicas=2): stagger prevents both router pods from restarting together.
+  P2="$W/probe2.sh"; render "$chart" "$P2" || { echo "FAIL  $chart replicas=2 does not render" >&2; fail=1; continue; }
+  reset; printf '10.0.0.20\n10.0.0.21\n' >"$W/dns/$ROUTER_HL"; touch "$W/serving/10.0.0.20" "$W/serving/10.0.0.21"; echo 10 >"$W/now"
+  expect_as 10.0.0.20 "$P2" 0 "replicas=2: steady state"
+  drift_2r; echo 10.0.0.20 >"$W/dns/$ROUTER_HL"; expect_as 10.0.0.20 "$P2" 0 "replicas=2: drift held when peer missing from DNS"
+  drift_2r; rm "$W/dns/$ROUTER_HL";             expect_as 10.0.0.20 "$P2" 0 "replicas=2: drift held on router DNS failure"
+  drift_2r; echo 10.0.0.21 >"$W/dns/$ROUTER_HL"; expect_as 10.0.0.20 "$P2" 0 "replicas=2: drift held when self not in Ready DNS"
+  drift_2r;                                     expect_as -         "$P2" 0 "replicas=2: drift held when POD_IP unset"
+  drift_2r; rm "$W/serving/10.0.0.21";          expect_as 10.0.0.20 "$P2" 0 "replicas=2: drift held when peer readiness fails"
+  drift_2r;                                     expect_as 10.0.0.20 "$P2" 1 "replicas=2: slot 0 fires for idx 0 (pos=10)"
+  drift_2r;                                     expect_as 10.0.0.21 "$P2" 0 "replicas=2: slot 0 holds idx 1"
+  drift_2r; echo 65 >"$W/now";                  expect_as 10.0.0.20 "$P2" 0 "replicas=2: slot 0 guard band holds idx 0 (pos=65)"
+  drift_2r; echo 65 >"$W/now";                  expect_as 10.0.0.21 "$P2" 0 "replicas=2: slot 0 guard band holds idx 1 (pos=65)"
+  drift_2r; echo 100 >"$W/now";                 expect_as 10.0.0.20 "$P2" 0 "replicas=2: slot 1 holds idx 0"
+  drift_2r; echo 100 >"$W/now";                 expect_as 10.0.0.21 "$P2" 1 "replicas=2: slot 1 fires for idx 1 (pos=10)"
+  drift_2r; echo 155 >"$W/now";                 expect_as 10.0.0.20 "$P2" 0 "replicas=2: slot 1 guard band holds idx 0 (pos=65)"
+  drift_2r; echo 155 >"$W/now";                 expect_as 10.0.0.21 "$P2" 0 "replicas=2: slot 1 guard band holds idx 1 (pos=65)"
 done
 exit $fail
