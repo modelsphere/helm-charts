@@ -239,6 +239,12 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.exec.command[2]
           pattern: '/tmp/pd-router/draining'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.exec.command[2]
+          pattern: 'timeout=2'
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.exec.command[2]
+          pattern: 'timeout=5'
       - equal:
           path: spec.template.spec.containers[?(@.name == "router")].lifecycle.preStop.exec.command[2]
           value: "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep 20"
@@ -252,6 +258,12 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
           pattern: 'ci-router-hl-s0\.ci\.svc\.cluster\.local\.'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: 'LC_ALL=C sort -u'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: '/tmp/pd-router/draining'
 
   - it: pd-ds renders a Ready-only headless Service for router peers
     template: templates/pd-ds.yaml

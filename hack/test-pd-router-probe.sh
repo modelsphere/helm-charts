@@ -73,7 +73,7 @@ else:
 
 # Boot snapshot prefill {.1, .2}, decode {.9}; all in DNS, serving, same identity.
 reset() {
-  rm -f "$W"/dns/* "$W"/serving/* "$W"/id/*
+  rm -f "$W"/dns/* "$W"/serving/* "$W"/id/* "$W/state/draining"
   : >"$W/calls"
   printf '10.0.0.1|0|t1\n10.0.0.2|0|t2\n' >"$W/state/prefill-ips"
   printf '10.0.0.9|0|t9\n' >"$W/state/decode-ips"
@@ -161,5 +161,18 @@ for chart in "$@"; do
   drift_2r; echo 100 >"$W/now";                 expect_as 10.0.0.21 "$P2" 1 "replicas=2: slot 1 fires for idx 1 (pos=10)"
   drift_2r; echo 155 >"$W/now";                 expect_as 10.0.0.20 "$P2" 0 "replicas=2: slot 1 guard band holds idx 0 (pos=65)"
   drift_2r; echo 155 >"$W/now";                 expect_as 10.0.0.21 "$P2" 0 "replicas=2: slot 1 guard band holds idx 1 (pos=65)"
+  drift_2r; printf '10.0.0.21\n10.0.0.20\n' >"$W/dns/$ROUTER_HL"
+                                                expect_as 10.0.0.20 "$P2" 1 "replicas=2: unsorted DNS still puts .20 at idx 0 (slot 0)"
+                                                expect_as 10.0.0.21 "$P2" 0 "replicas=2: unsorted DNS still puts .21 at idx 1 (slot 0 holds)"
+  echo 100 >"$W/now";                           expect_as 10.0.0.20 "$P2" 0 "replicas=2: unsorted DNS slot 1 holds .20"
+                                                expect_as 10.0.0.21 "$P2" 1 "replicas=2: unsorted DNS slot 1 fires .21"
+  drift_2r; : >"$W/dns/$ROUTER_HL"; rm "$W/serving/10.0.0.20" "$W/serving/10.0.0.21"
+                                                expect_as 10.0.0.20 "$P2" 1 "replicas=2: both NotReady bypasses stagger (no deadlock)"
+  echo 65 >"$W/now";                            expect_as 10.0.0.21 "$P2" 1 "replicas=2: both NotReady bypasses guard band too"
+  drift_2r; echo 10.0.0.21 >"$W/dns/$ROUTER_HL"; rm "$W/serving/10.0.0.20"
+                                                expect_as 10.0.0.20 "$P2" 1 "replicas=2: single NotReady self heals immediately"
+                                                expect_as 10.0.0.21 "$P2" 0 "replicas=2: remaining Ready peer stays held"
+  drift_2r; : >"$W/dns/$ROUTER_HL"; rm "$W/serving/10.0.0.20"; touch "$W/state/draining"
+                                                expect_as 10.0.0.20 "$P2" 0 "replicas=2: draining sentinel holds restart even if NotReady"
 done
 exit $fail

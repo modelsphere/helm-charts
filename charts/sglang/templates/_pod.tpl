@@ -1095,19 +1095,24 @@ if [ -f /tmp/pd-router/draining ]; then
 fi
 check() {
   local src=$1 port=$2 path=$3
-  # A name (any non-numeric character in src) -> resolve via DNS and try each.
-  # Dotted-quad literal -> probe directly, no resolution step. python3 +
-  # urllib, never curl or wget: the SGLang image ships neither (see the
-  # preStop drain hook for the same constraint).
+  # DNS name -> resolve and probe all IPs in one python3 call (2s/IP < 5s probe timeout).
+  # IP literal -> probe directly (smg image ships python3, not curl/wget).
   case "$src" in
     *[!0-9.]*)
-      for ip in $(getent hosts "$src" | awk '{print $1}' | sort -u); do
-        python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port$path', timeout=5)" >/dev/null 2>&1 && return 0
-      done
-      return 1
+      local ips
+      ips=$(timeout 2 getent hosts "$src" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u)
+      [ -n "$ips" ] || return 1
+      python3 -c 'import sys, urllib.request
+for ip in sys.argv[3].split():
+    try:
+        urllib.request.urlopen(f"http://{ip}:{sys.argv[1]}{sys.argv[2]}", timeout=2)
+        sys.exit(0)
+    except Exception:
+        pass
+sys.exit(1)' "$port" "$path" "$ips" >/dev/null 2>&1
       ;;
     *)
-      python3 -c "import urllib.request; urllib.request.urlopen('http://$src:$port$path', timeout=5)" >/dev/null 2>&1
+      python3 -c "import urllib.request; urllib.request.urlopen('http://$src:$port$path', timeout=2)" >/dev/null 2>&1
       ;;
   esac
 }
@@ -1193,7 +1198,7 @@ PY
 serving() { python3 -c "import urllib.request; urllib.request.urlopen('http://$1:$2$3', timeout=2)" 2>/dev/null; }
 # The role's current addresses, one per line; empty on a resolver blip
 # (timeout(1) kills getent with 124 and the pipeline emits nothing).
-resolve() { timeout 2 getent hosts "$1" 2>/dev/null | awk '{print $1}' | sort -u; }
+resolve() { timeout 2 getent hosts "$1" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u; }
 check() {
   # $2 (svc) is not read; it keeps the call naming the Service it checks.
   # $6 is that Service's resolve output, taken once per tick by the caller
@@ -1300,16 +1305,20 @@ check {{ $role | quote }} {{ $target.host | quote }} {{ $role }}-ips {{ $target.
 {{- end }}
 {{- end }}
 {{- with .peer }}
-# Multi-replica router stagger: never take the last Ready router down and
-# never let two replicas restart on the same tick. Only runs when drift
-# actually wants a restart (rc != 0); steady state costs zero extra lookups.
+# Stagger drift restarts across router replicas (only when rc != 0):
+#   1. Hold if already draining or POD_IP is unset.
+#   2. Bypass if self is NotReady (not in Ready DNS + /readiness failing) to avoid deadlock.
+#   3. Require >=2 Ready peers, own 90s slot [0, 60) (30s guard band), and a live peer.
 if [ "$rc" -ne 0 ]; then
   my_ip="${POD_IP:-}"
-  if [ -z "$my_ip" ]; then
+  if [ -f /tmp/pd-router/draining ]; then
+    echo "router stagger: already draining; holding restart" >&2
+    rc=0
+  elif [ -z "$my_ip" ]; then
     echo "router stagger: POD_IP unset; holding restart" >&2
     rc=0
   else
-    peers=$(resolve {{ .host | quote }})
+    peers=$(resolve {{ .host | quote }} | LC_ALL=C sort -u)
     peer_count=0
     my_idx=-1
     other_ready=0
@@ -1321,13 +1330,13 @@ if [ "$rc" -ne 0 ]; then
       peer_count=$((peer_count + 1))
     done <<<"$peers"
     if [ "$peer_count" -lt 2 ] || [ "$my_idx" -lt 0 ]; then
-      echo "router stagger: waiting for peer readiness (ready=$peer_count, self_idx=$my_idx)" >&2
-      rc=0
+      if [ "$my_idx" -lt 0 ] && ! serving "$my_ip" {{ .port | quote }} {{ .path | quote }}; then
+        echo "router stagger: self NotReady and /readiness failing (ready=$peer_count); bypassing stagger" >&2
+      else
+        echo "router stagger: waiting for peer readiness (ready=$peer_count, self_idx=$my_idx)" >&2
+        rc=0
+      fi
     else
-      # 90s turn per sorted peer IP, active trigger window [0, 60).
-      # The 30s guard band [60, 90) exceeds preStop readiness flip (<=10s)
-      # plus CoreDNS TTL (5s), so a pod that trips near t=59s is out of
-      # Ready DNS before the next peer's slot opens at t=90s.
       now=$(date +%s)
       slot=$(( (now / 90) % peer_count ))
       pos=$(( now % 90 ))
