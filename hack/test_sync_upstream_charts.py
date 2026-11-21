@@ -326,6 +326,49 @@ class SyncTargetTest(unittest.TestCase):
             self.assertEqual((dest / "Chart.yaml").read_text(encoding="utf-8"), original)
             self.assertEqual((dest / "values.yaml").read_text(encoding="utf-8"), "kept: true\n")
 
+    def test_invalid_upstream_yaml_after_replace_restores_dest(self):
+        """A YAML error after dest is replaced must not leave a half copy."""
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "charts" / "demo"
+            dest.mkdir(parents=True)
+            original = 'name: demo\nversion: 0.5.0\nappVersion: "0.5.0"\n'
+            (dest / "Chart.yaml").write_text(original, encoding="utf-8")
+            (dest / "values.yaml").write_text("kept: true\n", encoding="utf-8")
+
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+                payload = (
+                    b'name: demo\nversion: 0.5.1\nappVersion: "0.5.1"\n'
+                    b"dependencies: [unclosed\n"
+                )
+                info = tarfile.TarInfo(name="demo-0.5.1/charts/demo/Chart.yaml")
+                info.size = len(payload)
+                tar.addfile(info, io.BytesIO(payload))
+                values = b"changed: true\n"
+                info = tarfile.TarInfo(name="demo-0.5.1/charts/demo/values.yaml")
+                info.size = len(values)
+                tar.addfile(info, io.BytesIO(values))
+
+            target = {
+                "name": "demo",
+                "repo": "owner/repo",
+                "path": "charts/demo",
+                "dest": str(dest),
+                "keep": ["Chart.yaml"],
+            }
+            with (
+                patch.object(mod, "list_releases", return_value=[_release("v0.5.1")]),
+                patch.object(mod, "download_tarball", return_value=buf.getvalue()),
+            ):
+                result = mod.sync_target(target, check=False, skip_image_check=True)
+
+            self.assertEqual(result.result, "needs attention")
+            self.assertEqual(result.repo, "owner/repo")
+            self.assertEqual(result.upstream, "v0.5.1")
+            self.assertTrue(result.detail)
+            self.assertEqual((dest / "Chart.yaml").read_text(encoding="utf-8"), original)
+            self.assertEqual((dest / "values.yaml").read_text(encoding="utf-8"), "kept: true\n")
+
 
 class RenderedImageTest(unittest.TestCase):
     def test_matches_the_check_script_and_splits_the_repository(self):

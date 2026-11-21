@@ -232,6 +232,9 @@ def rewrite_images(text: str, rewrites: list[tuple[str, str]]) -> str:
     for src, dst in rewrites:
         if not src or src == dst:
             continue
+        # (?<!oci://) is kept for readability. The lookbehind after it,
+        # (?<![\w./-]), already rejects a match preceded by /, which is
+        # always true after oci://.
         pattern = re.compile(
             r"(?<!oci://)(?<![\w./-])" + re.escape(src) + r"(?=$|[:@\s\"'])"
         )
@@ -857,7 +860,11 @@ def sync_target(target: dict, *, check: bool, skip_image_check: bool) -> Result:
         return Result(
             name, current, tag, "skipped (image missing)", target["repo"], detail=str(exc)
         )
-    except (ChartError, UnsafePath, OSError) as exc:
+    except Exception as exc:
+        # Catch-all: after dest is replaced, a YAML or decode error is not a
+        # ChartError, but dest still has to go back before the backup is
+        # deleted in finally. Otherwise a later git add would commit a
+        # half-copied chart.
         if changed:
             try:
                 _restore(dest, backup, had_dest)
@@ -874,6 +881,13 @@ def sync_target(target: dict, *, check: bool, skip_image_check: bool) -> Result:
         _annotate("error", name, str(exc))
         _say(f"{name}: needs attention ({current} -> {tag})")
         return Result(name, current, tag, "needs attention", target["repo"], detail=str(exc))
+    except BaseException:
+        if changed:
+            try:
+                _restore(dest, backup, had_dest)
+            except OSError:
+                pass
+        raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
         shutil.rmtree(backup_root, ignore_errors=True)
