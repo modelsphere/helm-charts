@@ -468,7 +468,7 @@ and `patch` on `databases.postgresql.cnpg.io` in that namespace.
 | `database.fromSecret.host` | `""` | Empty: `<name>.<namespace>.svc.cluster.local` |
 | `database.fromSecret.user` / `.port` / `.passwordKey` | `h3` / `5432` / `password` | |
 | `database.url` | `""` | Wins over everything; required for plain `helm template` |
-| `database.existingSecret` (+ `create: false`) | `""` | A DSN Secret you manage |
+| `database.existingSecret` | `""` | A DSN Secret you manage (key `existingSecretKey`). Used as given whether or not `create` is on: the chart then writes no DSN Secret and creates no database. Only `database.url` wins over it |
 
 - `lookup` needs a live cluster. Plain `helm template`, and helm-diff without
   `--dry-run=server`, see nothing and the render fails: pass `database.url` or

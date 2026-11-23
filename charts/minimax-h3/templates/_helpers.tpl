@@ -93,7 +93,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 */}}
 {{- define "minimax-h3.priorDatabaseName" -}}
 {{- $f := .Values.database.fromSecret -}}
-{{- if and .Values.database.create $f.name $f.namespace -}}
+{{- if and (include "minimax-h3.ownsDbSecret" .) $f.name $f.namespace -}}
 {{- $sec := lookup "v1" "Secret" .Release.Namespace (include "minimax-h3.dbSecretName" .) -}}
 {{- if and $sec $sec.data (hasKey $sec.data "url") -}}
 {{- $u := urlParse (index $sec.data "url" | b64dec) -}}
@@ -107,13 +107,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{/*
   Whether to render the CloudNativePG Database: the DSN is built from fromSecret
-  (no url; database.create, so not an existing Secret), for this release's own
+  (no url, no existingSecret, database.create), for this release's own
   database, with createDatabase on. A database the release already runs on that
   is not its own (an upgrade from 0.2) is left as it is.
 */}}
 {{- define "minimax-h3.createDatabase" -}}
 {{- $f := .Values.database.fromSecret -}}
-{{- if and .Values.database.create (not .Values.database.url) $f.name $f.namespace (not $f.database) $f.createDatabase -}}
+{{- if and (include "minimax-h3.ownsDbSecret" .) (not .Values.database.url) $f.name $f.namespace (not $f.database) $f.createDatabase -}}
 {{- if eq (include "minimax-h3.databaseName" .) (include "minimax-h3.ownDatabaseName" .) -}}true{{- end -}}
 {{- end -}}
 {{- end -}}
@@ -151,11 +151,19 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- define "minimax-h3.sglang.fullname" -}}{{ include "minimax-h3.suffixed" (dict "root" . "suffix" "-sglang") }}{{- end -}}
 {{- define "minimax-h3.router.fullname" -}}{{ include "minimax-h3.suffixed" (dict "root" . "suffix" "-router") }}{{- end -}}
+{{/*
+  Whether the chart writes the DSN Secret itself: database.create, unless
+  existingSecret names one and no url overrides it. Order: url, then
+  existingSecret, then the DSN built from fromSecret.
+*/}}
+{{- define "minimax-h3.ownsDbSecret" -}}
+{{- if and .Values.database.create (or .Values.database.url (not .Values.database.existingSecret)) -}}true{{- end -}}
+{{- end -}}
 {{- define "minimax-h3.dbSecretName" -}}
-{{- if .Values.database.create -}}{{ include "minimax-h3.suffixed" (dict "root" . "suffix" "-db") }}{{- else -}}{{ required "database.existingSecret is required when database.create is false" .Values.database.existingSecret }}{{- end -}}
+{{- if include "minimax-h3.ownsDbSecret" . -}}{{ include "minimax-h3.suffixed" (dict "root" . "suffix" "-db") }}{{- else -}}{{ required "database.existingSecret is required when database.create is false" .Values.database.existingSecret }}{{- end -}}
 {{- end -}}
 {{- define "minimax-h3.dbSecretKey" -}}
-{{- if .Values.database.create -}}url{{- else -}}{{ .Values.database.existingSecretKey }}{{- end -}}
+{{- if include "minimax-h3.ownsDbSecret" . -}}url{{- else -}}{{ .Values.database.existingSecretKey }}{{- end -}}
 {{- end -}}
 
 {{/* 共享资产盘的 PVC 名 */}}

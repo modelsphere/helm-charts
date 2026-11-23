@@ -182,6 +182,95 @@ tests:
     asserts:
       - hasDocuments: {count: 0}
 
+  # ---- an existing Secret wins over fromSecret, with database.create left on ----
+  - it: existingSecret is used as given, and nothing of fromSecret is rendered
+    templates: [templates/db-secret.yaml, templates/database.yaml, templates/server-deployment.yaml]
+    set:
+      database.existingSecret: my-dsn
+      database.existingSecretKey: dsn
+    kubernetesProvider: *cnpgSecret
+    asserts:
+      - hasDocuments: {count: 0}
+        template: templates/db-secret.yaml
+      - hasDocuments: {count: 0}
+        template: templates/database.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: H3_DATABASE_URL, valueFrom: {secretKeyRef: {name: my-dsn, key: dsn}}}
+        template: templates/server-deployment.yaml
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+
+  - it: database.url still wins over existingSecret
+    templates: [templates/db-secret.yaml]
+    set:
+      database.url: postgresql://u:p@db:5432/x
+      database.existingSecret: my-dsn
+    asserts:
+      - equal: {path: stringData.url, value: "postgresql://u:p@db:5432/x"}
+
+  # ---- the GPU product pins only a pool that runs SGLang in its Pod ----
+  # With an external backend the pool Pod schedules on server.* (server-deployment
+  # picks its scheduling by sglang.enabled), so sglang.gpuProduct never reaches it.
+  - it: an external SGLang backend leaves the pool Pods off the GPU product
+    templates: [templates/server-deployment.yaml]
+    set:
+      database.url: postgresql://unused
+      sglang.enabled: false
+      sglang.gpuProduct: [NVIDIA-H800]
+      server.externalSglangUrl: http://backend:30010
+      pools.ref2va.enabled: false
+      router.enabled: false
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - notExists: {path: spec.template.spec.affinity}
+
+  - it: a pool running SGLang in its Pod is pinned to the GPU product
+    templates: [templates/server-deployment.yaml]
+    set:
+      database.url: postgresql://unused
+      sglang.gpuProduct: [NVIDIA-H800]
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content: {key: nvidia.com/gpu.product, operator: In, values: [NVIDIA-H800]}
+
+  # ---- the default queue query names the Service the ServiceMonitor scrapes ----
+  # service="<pool Deployment>" in __SCOPE__ holds only while the one scraped
+  # Service of a pool carries the Deployment's name.
+  - it: the scraped Service of a pool is named after its Deployment
+    templates: [templates/server-deployment.yaml]
+    set:
+      database.url: postgresql://unused
+    documentSelector: {path: "metadata.labels[\"minimax-h3/scrape\"]", value: "true", matchMany: true}
+    asserts:
+      - isKind: {of: Service}
+      - matchRegex: {path: metadata.name, pattern: "^h3-minimax-h3-server-(fl2va|ref2va)$"}
+
+  - it: the pool Deployments carry those names
+    templates: [templates/server-deployment.yaml]
+    set:
+      database.url: postgresql://unused
+    documentSelector: {path: kind, value: Deployment, matchMany: true}
+    asserts:
+      - matchRegex: {path: metadata.name, pattern: "^h3-minimax-h3-(server-(fl2va|ref2va)|router)$"}
+
+  - it: the ServiceMonitor selects only the scraped Services
+    templates: [templates/servicemonitor.yaml]
+    set:
+      database.url: postgresql://unused
+    asserts:
+      - equal: {path: "spec.selector.matchLabels[\"minimax-h3/scrape\"]", value: "true"}
+
+  - it: the default queue query is scoped to that Service
+    templates: [templates/autoscaling.yaml]
+    set:
+      database.url: postgresql://unused
+      sloRequirement.enabled: true
+    documentSelector: {path: metadata.name, value: h3-minimax-h3-server-fl2va}
+    asserts:
+      - matchRegex: {path: spec.queue.promql, pattern: 'service="h3-minimax-h3-server-fl2va"'}
+
   # ---- base URL ----
   - it: a trailing slash on modelRoute.url is not passed on
     templates: [templates/server-deployment.yaml]
