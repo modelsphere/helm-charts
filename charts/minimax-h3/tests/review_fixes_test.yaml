@@ -27,11 +27,11 @@ tests:
       - hasDocuments: {count: 1}
       - isKind: {of: Database}
       - equal: {path: apiVersion, value: postgresql.cnpg.io/v1}
-      - equal: {path: metadata.name, value: video-h3-h3}
+      - equal: {path: metadata.name, value: h3-video-h3-c3b29878}
       - equal: {path: metadata.namespace, value: middleware}
       - equal:
           path: spec
-          value: {cluster: {name: cnpg}, name: h3_video_h3, owner: h3, ensure: present, databaseReclaimPolicy: retain}
+          value: {cluster: {name: cnpg}, name: h3_video_h3_c3b29878, owner: h3, ensure: present, databaseReclaimPolicy: retain}
 
   - it: the DSN names the release's database and escapes the password
     templates: [templates/db-secret.yaml]
@@ -39,7 +39,7 @@ tests:
     asserts:
       - equal:
           path: stringData.url
-          value: postgresql://h3:p%40ss%3Aw%2Frd%231%25@cnpg-rw.middleware.svc.cluster.local:5432/h3_video_h3
+          value: postgresql://h3:p%40ss%3Aw%2Frd%231%25@cnpg-rw.middleware.svc.cluster.local:5432/h3_video_h3_c3b29878
 
   - it: the per-release name is lowercased, made [a-z0-9_] and kept within 63
     templates: [templates/database.yaml]
@@ -48,8 +48,8 @@ tests:
       namespace: a-very-long-namespace-name-for-video-generation-services
     kubernetesProvider: *cnpgSecret
     asserts:
-      - equal: {path: spec.name, value: h3_a_very_long_namespace_name_for_video_generation_ser_d620800a}
-      - matchRegex: {path: metadata.name, pattern: "^a-very-long-namespace-name-for-video-generation-servic-[0-9a-f]{8}$"}
+      - equal: {path: spec.name, value: h3_a_very_long_namespace_name_for_video_generation_ser_1c00e149}
+      - equal: {path: metadata.name, value: h3-a-very-long-namespace-name-for-video-generation-ser-1c00e149}
 
   - it: two long names that share a prefix get different databases
     templates: [templates/database.yaml]
@@ -58,8 +58,24 @@ tests:
       namespace: a-very-long-namespace-name-for-video-generation-services
     kubernetesProvider: *cnpgSecret
     asserts:
-      - notEqual: {path: spec.name, value: h3_a_very_long_namespace_name_for_video_generation_ser_d620800a}
-      - matchRegex: {path: spec.name, pattern: "^h3_a_very_long_namespace_name_for_video_generation_ser_[0-9a-f]{8}$"}
+      - equal: {path: spec.name, value: h3_a_very_long_namespace_name_for_video_generation_ser_f2cb6b66}
+
+  # - folds into _, so namespace and release alone would give both of these h3_video_a_h3.
+  - it: video-a/h3 and video/a-h3 get different databases (1 of 2)
+    templates: [templates/database.yaml]
+    release: {name: h3, namespace: video-a}
+    kubernetesProvider: *cnpgSecret
+    asserts:
+      - equal: {path: spec.name, value: h3_video_a_h3_b6fbe84c}
+      - equal: {path: metadata.name, value: h3-video-a-h3-b6fbe84c}
+
+  - it: video-a/h3 and video/a-h3 get different databases (2 of 2)
+    templates: [templates/database.yaml]
+    release: {name: a-h3, namespace: video}
+    kubernetesProvider: *cnpgSecret
+    asserts:
+      - equal: {path: spec.name, value: h3_video_a_h3_2cecf155}
+      - equal: {path: metadata.name, value: h3-video-a-h3-2cecf155}
 
   - it: a named database is used as it is and nothing is created
     templates: [templates/database.yaml, templates/db-secret.yaml]
@@ -80,8 +96,84 @@ tests:
     asserts:
       - hasDocuments: {count: 0}
         template: templates/database.yaml
-      - matchRegex: {path: stringData.url, pattern: "/h3_video_h3$"}
+      - matchRegex: {path: stringData.url, pattern: "/h3_video_h3_c3b29878$"}
         template: templates/db-secret.yaml
+
+  # ---- an upgrade keeps the database the release already runs on ----
+  - it: an upgrade from 0.2 (DSN on minimaxh3, same host) keeps minimaxh3 and creates nothing
+    templates: [templates/database.yaml, templates/db-secret.yaml]
+    kubernetesProvider: &priorShared
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: cnpg-rw, namespace: middleware}
+          data: {password: cEBzczp3L3JkIzEl}
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: h3-minimax-h3-db, namespace: video}
+          # base64 of "postgresql://h3:x@cnpg-rw.middleware.svc.cluster.local:5432/minimaxh3"
+          data: {url: cG9zdGdyZXNxbDovL2gzOnhAY25wZy1ydy5taWRkbGV3YXJlLnN2Yy5jbHVzdGVyLmxvY2FsOjU0MzIvbWluaW1heGgz}
+    asserts:
+      - hasDocuments: {count: 0}
+        template: templates/database.yaml
+      - matchRegex: {path: stringData.url, pattern: "/minimaxh3$"}
+        template: templates/db-secret.yaml
+
+  - it: a release already on its own database keeps rendering its Database
+    templates: [templates/database.yaml]
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: cnpg-rw, namespace: middleware}
+          data: {password: cEBzczp3L3JkIzEl}
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: h3-minimax-h3-db, namespace: video}
+          # base64 of "postgresql://h3:x@cnpg-rw.middleware.svc.cluster.local:5432/h3_video_h3_c3b29878"
+          data: {url: cG9zdGdyZXNxbDovL2gzOnhAY25wZy1ydy5taWRkbGV3YXJlLnN2Yy5jbHVzdGVyLmxvY2FsOjU0MzIvaDNfdmlkZW9faDNfYzNiMjk4Nzg=}
+    asserts:
+      - hasDocuments: {count: 1}
+      - equal: {path: spec.name, value: h3_video_h3_c3b29878}
+
+  - it: a DSN on another host (an earlier database.url) is not taken over
+    templates: [templates/database.yaml, templates/db-secret.yaml]
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: cnpg-rw, namespace: middleware}
+          data: {password: cEBzczp3L3JkIzEl}
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: h3-minimax-h3-db, namespace: video}
+          # base64 of "postgresql://u:p@db.example:5432/minimaxh3"
+          data: {url: cG9zdGdyZXNxbDovL3U6cEBkYi5leGFtcGxlOjU0MzIvbWluaW1heGgz}
+    asserts:
+      - hasDocuments: {count: 1}
+        template: templates/database.yaml
+      - matchRegex: {path: stringData.url, pattern: "/h3_video_h3_c3b29878$"}
+        template: templates/db-secret.yaml
+
+  - it: fromSecret.database still wins over the release's current database
+    templates: [templates/db-secret.yaml]
+    set:
+      database.fromSecret.database: other
+    kubernetesProvider: *priorShared
+    asserts:
+      - matchRegex: {path: stringData.url, pattern: "/other$"}
 
   - it: an explicit url creates no database
     templates: [templates/database.yaml]

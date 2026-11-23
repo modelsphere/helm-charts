@@ -57,30 +57,65 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{/*
-  The database the DSN built from fromSecret names: fromSecret.database when set,
-  else this release's own, h3_<namespace>_<release> (lowercase, [a-z0-9_], at
-  most 63 bytes, PostgreSQL's identifier limit; a longer one is cut and given a
-  hash of the whole).
+  The database the DSN built from fromSecret names:
+  - fromSecret.database when set;
+  - else the database this release already runs on, read from its own DSN Secret
+    when that Secret points at the same host. An upgrade from 0.2, whose default
+    was the shared minimaxh3, keeps its database and its tasks instead of moving
+    to a new, empty one;
+  - else this release's own (minimax-h3.ownDatabaseName).
 */}}
 {{- define "minimax-h3.databaseName" -}}
 {{- $f := .Values.database.fromSecret -}}
 {{- if $f.database -}}
 {{- $f.database -}}
 {{- else -}}
+{{- include "minimax-h3.priorDatabaseName" . | default (include "minimax-h3.ownDatabaseName" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+  This release's own database: h3_<namespace>_<release>_<hash>, lowercase
+  [a-z0-9_], at most 63 bytes (PostgreSQL's identifier limit). The hash is of
+  "<namespace>/<release>": with - folded to _, h3_video_a_h3 would otherwise be
+  both video-a/h3 and video/a-h3.
+*/}}
+{{- define "minimax-h3.ownDatabaseName" -}}
+{{- $hash := printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 8 -}}
 {{- $n := regexReplaceAll "[^a-z0-9_]" (printf "h3_%s_%s" .Release.Namespace .Release.Name | lower) "_" -}}
-{{- /* Cut to fit, with a hash of the whole name, so two long names that share a prefix stay apart. */ -}}
-{{- if gt (len $n) 63 -}}{{- $n = printf "%s_%s" (trunc 54 $n) (sha256sum $n | trunc 8) -}}{{- end -}}
-{{- $n -}}
+{{- printf "%s_%s" (trunc 54 $n | trimSuffix "_") $hash -}}
+{{- end -}}
+
+{{/*
+  The database named in this release's own DSN Secret (database.create), when
+  that DSN points at the fromSecret host; empty otherwise, and always empty in a
+  plain render (lookup needs a live cluster).
+*/}}
+{{- define "minimax-h3.priorDatabaseName" -}}
+{{- $f := .Values.database.fromSecret -}}
+{{- if and .Values.database.create $f.name $f.namespace -}}
+{{- $sec := lookup "v1" "Secret" .Release.Namespace (include "minimax-h3.dbSecretName" .) -}}
+{{- if and $sec $sec.data (hasKey $sec.data "url") -}}
+{{- $u := urlParse (index $sec.data "url" | b64dec) -}}
+{{- $host := $f.host | default (printf "%s.%s.svc.cluster.local" $f.name $f.namespace) -}}
+{{- if eq (regexReplaceAll ":[0-9]+$" $u.host "") $host -}}
+{{- trimPrefix "/" $u.path -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
   Whether to render the CloudNativePG Database: the DSN is built from fromSecret
-  (no url, no existing Secret), for the per-release name, with createDatabase on.
+  (no url; database.create, so not an existing Secret), for this release's own
+  database, with createDatabase on. A database the release already runs on that
+  is not its own (an upgrade from 0.2) is left as it is.
 */}}
 {{- define "minimax-h3.createDatabase" -}}
 {{- $f := .Values.database.fromSecret -}}
-{{- if and .Values.database.create (not .Values.database.url) $f.name $f.namespace (not $f.database) $f.createDatabase -}}true{{- end -}}
+{{- if and .Values.database.create (not .Values.database.url) $f.name $f.namespace (not $f.database) $f.createDatabase -}}
+{{- if eq (include "minimax-h3.databaseName" .) (include "minimax-h3.ownDatabaseName" .) -}}true{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "minimax-h3.suffixed" -}}

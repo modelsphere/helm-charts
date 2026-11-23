@@ -39,7 +39,7 @@ client ──► Router (Deployment, stateless, optional)
 - **PostgreSQL is external.** By default the chart reads the password of the shared
   CloudNativePG cluster that the [modelsphere](https://github.com/modelsphere/modelsphere)
   installer creates (`middleware/cnpg-rw`, user `h3`) and gives each release a database of its
-  own there, `h3_<namespace>_<release>` (see [Database](#database)). Or point `database.url`
+  own there, `h3_<namespace>_<release>_<hash>` (see [Database](#database)). Or point `database.url`
   at any PostgreSQL. Secrets cannot be
   referenced across namespaces, so the chart writes a DSN-only Secret in its own namespace.
 
@@ -60,9 +60,11 @@ client ──► Router (Deployment, stateless, optional)
   they resolve to the same `/data/models/...` paths as before, and explicit `hostPath` values win.
 - `database.fromSecret` now defaults to the modelsphere CNPG cluster, with a database of the
   release's own that the chart creates there. See [Database](#database). A release that gives
-  `database.url` or `database.existingSecret` is unaffected. A release that already ran on the
-  shared `minimaxh3` database (a 0.3 prerelease default) sets
-  `database.fromSecret.database: minimaxh3` to stay on it and keep its tasks.
+  `database.url` or `database.existingSecret` is unaffected. A 0.2 release that built its DSN
+  from `database.fromSecret` ran on `minimaxh3`, 0.2's default: on upgrade the chart reads the
+  database from the release's own DSN Secret and **stays on it**, creating nothing, so its tasks
+  are kept. That needs the live cluster (`lookup`); a plain render cannot see it, so pin
+  `database.fromSecret.database: minimaxh3` when you render offline or want it explicit.
 - `helm upgrade --reuse-values` from 0.2 renders: it carries the 0.2 chart's values, which have
   none of the new maps, and those read as off (no scaler, no SLO requirement).
 - `sloRequirement.queue.maxDepth` now applies to both pools when set; unset, the pools keep 5
@@ -432,19 +434,22 @@ chart `lookup`s that Secret and writes the DSN
 `postgresql://h3:<pw>@cnpg-rw.middleware.svc.cluster.local:5432/<database>` into a Secret of its
 own (user and password URL-escaped).
 
-**Each release gets a database of its own**: `h3_<namespace>_<release>` (lowercased, other
-characters as `_`; a name over 63 bytes is cut and given a hash of the whole). The chart renders a
-CloudNativePG `Database` in the Cluster's namespace that creates it, owned by `h3`:
+**Each release gets a database of its own**: `h3_<namespace>_<release>_<hash>` (lowercased,
+other characters as `_`, cut to fit PostgreSQL's 63 bytes; `<hash>` is 8 hex of
+`<namespace>/<release>`, so `video-a/h3` and `video/a-h3` stay apart although both fold to
+`h3_video_a_h3`). A release that already runs on a database (its DSN Secret names one on the same
+host, as after an upgrade from 0.2) keeps it and renders no `Database`. Otherwise the chart renders
+a CloudNativePG `Database` in the Cluster's namespace that creates it, owned by `h3`:
 
 ```yaml
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  name: <namespace>-<release>-h3
+  name: h3-<namespace>-<release>-<hash>   # the database name with _ as -
   namespace: middleware
 spec:
   cluster: {name: cnpg}
-  name: h3_<namespace>_<release>
+  name: h3_<namespace>_<release>_<hash>
   owner: h3
   ensure: present
   databaseReclaimPolicy: retain
@@ -457,7 +462,7 @@ and `patch` on `databases.postgresql.cnpg.io` in that namespace.
 | Value | Default | |
 | --- | --- | --- |
 | `database.fromSecret.namespace` / `.name` | `middleware` / `cnpg-rw` | Where the password is; set either to `""` to turn the lookup off |
-| `database.fromSecret.database` | `""` | Empty: the release's own, created as above. A name (such as the bootstrap's `minimaxh3`) is used as it is and nothing is created |
+| `database.fromSecret.database` | `""` | Empty: the database the release already runs on, else its own, created as above. A name (such as the bootstrap's `minimaxh3`) is used as it is and nothing is created |
 | `database.fromSecret.createDatabase` | `true` | Off: the release's database must already exist |
 | `database.fromSecret.cluster` | `cnpg` | The CloudNativePG Cluster the `Database` is created on |
 | `database.fromSecret.host` | `""` | Empty: `<name>.<namespace>.svc.cluster.local` |

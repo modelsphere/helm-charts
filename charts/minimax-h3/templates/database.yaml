@@ -9,9 +9,8 @@
 apiVersion: postgresql.cnpg.io/v1
 kind: Database
 metadata:
-  {{- $name := printf "%s-%s-h3" .Release.Namespace .Release.Name }}
-  {{- if gt (len $name) 63 }}{{- $name = printf "%s-%s" (trunc 54 $name | trimSuffix "-" | trimSuffix ".") (sha256sum $name | trunc 8) }}{{- end }}
-  name: {{ $name }}
+  {{- /* The database's own name, as a DNS label: unique for the same reason (the hash). */}}
+  name: {{ include "minimax-h3.ownDatabaseName" . | replace "_" "-" }}
   namespace: {{ $f.namespace }}
   labels:
     {{- include "minimax-h3.labels" . | nindent 4 }}

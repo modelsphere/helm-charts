@@ -70,7 +70,10 @@ database:
   # Two releases must not share one database: workers claim any queued task of
   # their capability, so they would run each other's tasks. So by default each
   # release gets a database of its own on that cluster: database empty names it
-  # h3_<namespace>_<release>, and createDatabase renders a CloudNativePG Database
+  # h3_<namespace>_<release>_<hash> (hash of <namespace>/<release>), unless the
+  # release's own DSN Secret already names a database on this host (an upgrade
+  # from 0.2, whose default was minimaxh3), which it keeps and creates nothing for;
+  # and createDatabase renders a CloudNativePG Database
   # in fromSecret.namespace that creates it, owned by user. Its reclaim policy is
   # retain: uninstalling the release removes the Database object and keeps the
   # data. Naming a database (such as the bootstrap's minimaxh3) uses that one
@@ -82,7 +85,8 @@ database:
     host: ""
     passwordKey: password
     user: h3
-    # Empty: h3_<namespace>_<release>, created by the Database below.
+    # Empty: the database the release already runs on, else h3_<namespace>_<release>_<hash>,
+    # created by the Database below.
     database: ""
     port: 5432
     # Render the CloudNativePG Database for the per-release name. Off: the
