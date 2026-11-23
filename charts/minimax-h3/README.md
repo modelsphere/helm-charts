@@ -38,8 +38,9 @@ client ──► Router (Deployment, stateless, optional)
   only one pool may be enabled in that shape.
 - **PostgreSQL is external.** By default the chart reads the password of the shared
   CloudNativePG cluster that the [modelsphere](https://github.com/modelsphere/modelsphere)
-  installer creates (`middleware/cnpg-rw`, database `minimaxh3`, user `h3`; see
-  [Database](#database)). Or point `database.url` at any PostgreSQL. Secrets cannot be
+  installer creates (`middleware/cnpg-rw`, user `h3`) and gives each release a database of its
+  own there, `h3_<namespace>_<release>` (see [Database](#database)). Or point `database.url`
+  at any PostgreSQL. Secrets cannot be
   referenced across namespaces, so the chart writes a DSN-only Secret in its own namespace.
 
 ## Prerequisites
