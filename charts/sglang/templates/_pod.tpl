@@ -487,6 +487,14 @@
        list. Implement by pre-merging roleCfg.env over $root.Values.env,
        then handing the union to mergeEnv as its "user" side. Non-pd
        callers pass no roleCfg.env and the chain is a no-op. */}}
+  {{- $colocate := .colocate | default false }}
+  {{- $pdDsLeader := and $pdRole (not $colocate) $serves }}
+  {{- $pdRoleName := ternary "decode" "prefill" (hasPrefix "decode-" $role) }}
+  {{- if $pdDsLeader }}
+  {{- $chartEnv = concat $chartEnv (list
+        (dict "name" "POD_IP" "valueFrom" (dict "fieldRef" (dict "fieldPath" "status.podIP")))
+        (dict "name" "PD_SLICE" "valueFrom" (dict "fieldRef" (dict "fieldPath" "metadata.labels['disaggregatedset.x-k8s.io/slice']")))) }}
+  {{- end }}
   {{- $userEnv := $root.Values.env | default list }}
   {{- if $pdRole }}
   {{- $userEnv = concat $userEnv ($roleCfg.env | default list) }}
@@ -641,7 +649,7 @@
           # all. Wanting the fallback without giving up the drain is a legitimate
           # combination, so they stay separate switches.
           - |
-            {{- include "sglang.preStopScript" (dict "root" $root "serves" $serves "kill" (ternary $lws.leaderPreStopKill $root.Values.lifecycle.preStopKill $multi) "httpPort" $httpPort "hwPort" $hwPort) | nindent 14 }}
+            {{- include "sglang.preStopScript" (dict "root" $root "serves" $serves "kill" (ternary $lws.leaderPreStopKill $root.Values.lifecycle.preStopKill $multi) "httpPort" $httpPort "hwPort" $hwPort "pdDs" $pdDsLeader "pdRoleName" $pdRoleName) | nindent 14 }}
   {{- end }}
   {{- if $serves }}
   {{- with $root.Values.startupProbe }}
@@ -1066,45 +1074,49 @@ tolerations:
   Emits startupProbe and readinessProbe back-to-back at the caller's
   indent. startupProbe carries the engines' 90-minute load budget so a
   router pod scheduled before its engines have loaded is not
-  liveness-restarted. readinessProbe ticks at 30s because each call
-  costs an engine, even a shallow one -- the engines' own probes can
-  afford 10s because the kubelet runs them; doubling the cadence by
-  stacking a router copy on top is money for no signal.
+  liveness-restarted. readinessProbe ticks at 5s (plus draining sentinel).
 */ -}}
 {{- define "sglang.pdRouterProbes" -}}
 {{- $roles := .roles -}}
 startupProbe:
   exec:
     command: ["bash", "-lc", {{ include "sglang.pdRouterProbeScript" (dict "roles" $roles) | quote }}]
-  periodSeconds: 30
+  periodSeconds: 5
   timeoutSeconds: 10
-  failureThreshold: 180           # 180 x 30s = 90 minutes -- the engines' load budget
+  failureThreshold: 1080          # 1080 x 5s = 90 minutes -- the engines' load budget
 readinessProbe:
   exec:
     command: ["bash", "-lc", {{ include "sglang.pdRouterProbeScript" (dict "roles" $roles) | quote }}]
-  periodSeconds: 30
+  periodSeconds: 5
   timeoutSeconds: 5
-  failureThreshold: 3
+  failureThreshold: 2
 {{- end -}}
 
 {{- define "sglang.pdRouterProbeScript" -}}
 {{- $roles := .roles -}}
 set -u
+if [ -f /tmp/pd-router/draining ]; then
+  echo "router not ready: draining" >&2
+  exit 1
+fi
 check() {
   local src=$1 port=$2 path=$3
-  # A name (any non-numeric character in src) -> resolve via DNS and try each.
-  # Dotted-quad literal -> probe directly, no resolution step. python3 +
-  # urllib, never curl or wget: the SGLang image ships neither (see the
-  # preStop drain hook for the same constraint).
   case "$src" in
     *[!0-9.]*)
-      for ip in $(getent hosts "$src" | awk '{print $1}' | sort -u); do
-        python3 -c "import urllib.request; urllib.request.urlopen('http://$ip:$port$path', timeout=5)" >/dev/null 2>&1 && return 0
-      done
-      return 1
+      local ips
+      ips=$(timeout 2 getent hosts "$src" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u)
+      [ -n "$ips" ] || return 1
+      python3 -c 'import sys, urllib.request
+for ip in sys.argv[3].split():
+    try:
+        urllib.request.urlopen(f"http://{ip}:{sys.argv[1]}{sys.argv[2]}", timeout=2)
+        sys.exit(0)
+    except Exception:
+        pass
+sys.exit(1)' "$port" "$path" "$ips" >/dev/null 2>&1
       ;;
     *)
-      python3 -c "import urllib.request; urllib.request.urlopen('http://$src:$port$path', timeout=5)" >/dev/null 2>&1
+      python3 -c "import urllib.request; urllib.request.urlopen('http://$src:$port$path', timeout=2)" >/dev/null 2>&1
       ;;
   esac
 }
@@ -1141,9 +1153,10 @@ exit 0
 {{- define "sglang.pdRouterLivenessProbe" -}}
 {{- $roles := .roles -}}
 {{- $root := .root -}}
+{{- $peer := .peer -}}
 livenessProbe:
   exec:
-    command: ["bash", "-lc", {{ include "sglang.pdRouterLivenessProbeScript" (dict "root" $root "roles" $roles) | quote }}]
+    command: ["bash", "-lc", {{ include "sglang.pdRouterLivenessProbeScript" (dict "root" $root "roles" $roles "peer" $peer) | quote }}]
   periodSeconds: 10
   timeoutSeconds: 10
   failureThreshold: 2
@@ -1189,7 +1202,7 @@ PY
 serving() { python3 -c "import urllib.request; urllib.request.urlopen('http://$1:$2$3', timeout=2)" 2>/dev/null; }
 # The role's current addresses, one per line; empty on a resolver blip
 # (timeout(1) kills getent with 124 and the pipeline emits nothing).
-resolve() { timeout 2 getent hosts "$1" 2>/dev/null | awk '{print $1}' | sort -u; }
+resolve() { timeout 2 getent hosts "$1" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u; }
 check() {
   # $2 (svc) is not read; it keeps the call naming the Service it checks.
   # $6 is that Service's resolve output, taken once per tick by the caller
@@ -1253,31 +1266,11 @@ check() {
   # resolver blip or an atomic re-roll, and a restart then only parks the
   # router in its boot loop waiting on that role.
   [ -n "$resolved" ] && [ "$all_resolve" -eq 1 ] || return 0
-  # Shrink: an argv IP missing from a non-empty answer. DNS alone never
-  # decides -- a partial answer is the flicker case -- so the IP itself
-  # must corroborate: it is gone only if it no longer serves $path, or it
-  # serves with a different identity than the snapshot (the IP was reused
-  # by another pod, possibly another release's engine on the same port).
-  # A live engine with its own identity is a DNS flicker: skip. (A snapshot
-  # taken without identity, "ip||", cannot tell its own engine from another:
-  # once the live side reports one it fires -- as the growth branch above
-  # does for the same IP on the next clean answer.) The restart re-snapshots
-  # from DNS, so a real scale-down fires once, not in a loop.
-  local want_r want_t
-  while IFS='|' read -r ip want_r want_t; do
+  # Shrink: argv IP left Ready DNS.
+  while IFS='|' read -r ip _; do
     [ -n "$ip" ] || continue
     printf '%s\n' "$resolved" | grep -qxF "$ip" && continue
-    if serving "$ip" "$port" "$path"; then
-      live=$(live_id "$ip") || continue  # serving, identity unknown: alive
-      [ "$live" = '|' ] && continue
-      [ "$live" = "$want_r|$want_t" ] && continue
-      echo "router stale: $role upstream $ip left DNS and its address now serves another engine ($want_r|$want_t -> $live)" >&2
-    else
-      echo "router stale: $role upstream $ip left DNS and no longer serves" >&2
-    fi
-    # One is enough to restart, and each dead address costs a full probe
-    # timeout: stop here so a large scale-down cannot run the probe past
-    # its own timeoutSeconds.
+    echo "router stale: $role upstream $ip left Ready DNS ($svc)" >&2
     rc=1
     break
   done <"$file"
@@ -1294,6 +1287,60 @@ res_{{ $role }}=$(resolve {{ $target.host | quote }}); [ -n "$res_{{ $role }}" ]
 {{- if ne $role "router" }}{{/* the router itself, not an upstream: nothing to drift-check */}}
 check {{ $role | quote }} {{ $target.host | quote }} {{ $role }}-ips {{ $target.port | quote }} {{ required (printf "pd router liveness target %s needs a path" $role) $target.path | quote }} "$res_{{ $role }}"
 {{- end }}
+{{- end }}
+{{- with .peer }}
+# Peer-gated 90s stagger (bypass if self NotReady).
+if [ "$rc" -ne 0 ]; then
+  my_ip="${POD_IP:-}"
+  if [ -f /tmp/pd-router/draining ]; then
+    echo "router stagger: already draining; holding restart" >&2
+    rc=0
+  elif [ -z "$my_ip" ]; then
+    echo "router stagger: POD_IP unset; holding restart" >&2
+    rc=0
+  else
+    peers=$(resolve {{ .host | quote }} | LC_ALL=C sort -u)
+    peer_count=0
+    my_idx=-1
+    other_ready=0
+    while read -r p; do
+      [ -n "$p" ] || continue
+      if [ "$p" = "$my_ip" ]; then
+        my_idx=$peer_count
+      fi
+      peer_count=$((peer_count + 1))
+    done <<<"$peers"
+    if [ "$peer_count" -lt 2 ] || [ "$my_idx" -lt 0 ]; then
+      if [ "$my_idx" -lt 0 ] && ! serving "$my_ip" {{ .port | quote }} {{ .path | quote }}; then
+        echo "router stagger: self NotReady and /readiness failing (ready=$peer_count); bypassing stagger" >&2
+      else
+        echo "router stagger: waiting for peer readiness (ready=$peer_count, self_idx=$my_idx)" >&2
+        rc=0
+      fi
+    else
+      now=$(date +%s)
+      slot=$(( (now / 90) % peer_count ))
+      pos=$(( now % 90 ))
+      if [ "$slot" -ne "$my_idx" ] || [ "$pos" -ge 60 ]; then
+        echo "router stagger: waiting for turn (idx=$my_idx/$peer_count, slot=$slot, pos=${pos}s)" >&2
+        rc=0
+      else
+        while read -r p; do
+          [ -n "$p" ] || continue
+          [ "$p" = "$my_ip" ] && continue
+          if serving "$p" {{ .port | quote }} {{ .path | quote }}; then
+            other_ready=1
+            break
+          fi
+        done <<<"$peers"
+        if [ "$other_ready" -ne 1 ]; then
+          echo "router stagger: no peer answering /readiness; holding restart" >&2
+          rc=0
+        fi
+      fi
+    fi
+  fi
+fi
 {{- end }}
 exit $rc
 {{- end -}}
@@ -1347,7 +1394,9 @@ exit $rc
        service.port, keeping the non-pd drain unchanged. */ -}}
 {{- $httpPort := .httpPort | default $root.Values.service.port -}}
 {{- $hwPort := .hwPort | default $root.Values.hangWatcher.port -}}
-import time, urllib.request, urllib.error{{ if .kill }}, os, signal{{ end }}
+{{- $pdDs := .pdDs | default false -}}
+{{- $pdRoleName := .pdRoleName | default "" -}}
+import time, urllib.request, urllib.error{{ if or .kill $pdDs }}, os{{ end }}{{ if .kill }}, signal{{ end }}{{ if $pdDs }}, json, socket{{ end }}
 
 METRICS = "http://127.0.0.1:{{ $httpPort }}/metrics"
 # What SGLang is working on right now, plus what is queued up.
@@ -1423,6 +1472,107 @@ def hung():
 
 
 deadline = time.monotonic() + {{ $preStop.drainSeconds }}
+{{- if $pdDs }}
+# Evict from Ready PD routers before draining in-flight requests.
+POD_IP = os.environ.get("POD_IP", "")
+PD_SLICE = os.environ.get("PD_SLICE", "")
+FULLNAME = {{ include "sglang.fullname" $root | quote }}
+NS = {{ $root.Release.Namespace | quote }}
+PD_ROLE = {{ $pdRoleName | quote }}
+HTTP_PORT = {{ $httpPort }}
+ROUTER_PORT = {{ $root.Values.service.port }}
+ROUTER_REPLICAS = {{ int ($root.Values.pd.router.replicas | default 2) }}
+ROUTER_WAIT_CAP = min(240, {{ $preStop.drainSeconds }})
+if POD_IP and PD_SLICE:
+    ROUTER_HL = f"{FULLNAME}-router-hl-s{PD_SLICE}.{NS}.svc.cluster.local."
+    ROLE_HL = f"{FULLNAME}-{PD_ROLE}-hl-s{PD_SLICE}.{NS}.svc.cluster.local."
+    MY_URL = f"http://{POD_IP}:{HTTP_PORT}"
+
+    def resolve_ips(host):
+        try:
+            return sorted({ai[4][0] for ai in socket.getaddrinfo(host, None, socket.AF_INET)})
+        except Exception:
+            return []
+
+    def base_url(u):
+        return (u or "").split("@", 1)[0].rstrip("/")
+
+    def same_role(w):
+        wt = w.get("worker_type", "")
+        if isinstance(wt, dict) and wt:
+            wt = next(iter(wt.keys()))
+        return str(wt).lower() == PD_ROLE
+
+    def get_workers(rip):
+        try:
+            raw = OPEN(f"http://{rip}:{ROUTER_PORT}/workers", timeout=2).read().decode()
+            data = json.loads(raw)
+            return data if isinstance(data, list) else (data.get("workers") or [])
+        except Exception:
+            return None
+
+    def try_remove(rip, items):
+        for w in items:
+            wid = w.get("id") or w.get("worker_id")
+            if not wid:
+                continue
+            try:
+                req = urllib.request.Request(f"http://{rip}:{ROUTER_PORT}/workers/{wid}", method="DELETE")
+                OPEN(req, timeout=2).read()
+                log(f"requested DELETE /workers/{wid} on router {rip} for {MY_URL}")
+            except Exception as e:
+                log(f"best-effort DELETE /workers/{wid} on router {rip} failed: {e}")
+
+    router_deadline = min(deadline, time.monotonic() + ROUTER_WAIT_CAP)
+    removed_sent = set()
+    waited_routers = False
+    no_survivor_streak = 0
+    while time.monotonic() < router_deadline:
+        surviving = [ip for ip in resolve_ips(ROLE_HL) if ip != POD_IP]
+        if not surviving:
+            no_survivor_streak += 1
+            if no_survivor_streak >= 2:
+                log(f"no surviving Ready peers in {ROLE_HL}; skipping router wait")
+                break
+        else:
+            no_survivor_streak = 0
+        {{- if $askWatcher }}
+        if hung():
+            log("hang-watcher reports hung -- skipping router wait")
+            break
+        {{- end }}
+        routers = resolve_ips(ROUTER_HL)
+        if routers:
+            all_ok = True
+            still_listed = False
+            is_last_on_any = False
+            for rip in routers:
+                items = get_workers(rip)
+                if items is None:
+                    all_ok = False
+                    continue
+                mine = [w for w in items if base_url(w.get("url", "")) == MY_URL]
+                if mine:
+                    still_listed = True
+                    role_bases = {base_url(w.get("url", "")) for w in items if same_role(w) and w.get("url")}
+                    if len(role_bases) <= 1:
+                        is_last_on_any = True
+                    elif rip not in removed_sent:
+                        removed_sent.add(rip)
+                        try_remove(rip, mine)
+            if is_last_on_any:
+                log("last worker of role on router; skipping router wait")
+                break
+            if all_ok and not still_listed and len(routers) >= ROUTER_REPLICAS:
+                log(f"all {len(routers)} router(s) dropped {MY_URL}; proceeding to drain")
+                if waited_routers:
+                    time.sleep(min(2, max(0.0, deadline - time.monotonic())))
+                break
+        waited_routers = True
+        time.sleep(min({{ $poll }}, max(0.0, router_deadline - time.monotonic())))
+    else:
+        log(f"router eviction wait timed out after {ROUTER_WAIT_CAP}s; proceeding to drain")
+{{- end }}
 unreadable = 0
 while time.monotonic() < deadline:
     {{- if $askWatcher }}

@@ -214,3 +214,212 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].args[0]
           pattern: 'seq 1 60|exit 1'
+
+  - it: pd-ds defaults to 2 router replicas with preStop drain, fast probes, and staggered peer liveness
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].startupProbe.periodSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].startupProbe.failureThreshold
+          value: 1080
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.periodSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.failureThreshold
+          value: 2
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.exec.command[2]
+          pattern: '/tmp/pd-router/draining'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.exec.command[2]
+          pattern: 'timeout=2'
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.exec.command[2]
+          pattern: 'timeout=5'
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].lifecycle.preStop.exec.command[2]
+          value: "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep 20"
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "router")].env
+          content:
+            name: POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: 'ci-router-hl-s0\.ci\.svc\.cluster\.local\.'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: 'LC_ALL=C sort -u'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: '/tmp/pd-router/draining'
+
+  - it: pd-ds renders a Ready-only headless Service for router peers
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-hl-s0
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.clusterIP
+          value: None
+      - equal:
+          path: spec.publishNotReadyAddresses
+          value: false
+      - equal:
+          path: spec.selector
+          value:
+            app: ci-vllm
+            component: router
+            slice: "0"
+
+  - it: pd-ds with pd.router.replicas=1 skips peer stagger in livenessProbe
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      pd.router.replicas: 1
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
+          pattern: 'ci-router-hl-s0'
+
+  - it: pd-ds renders a minAvailable=1 router PDB by default
+    template: templates/pdb.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.minAvailable
+          value: 1
+
+  - it: pd-ds sets publishNotReadyAddresses=false on prefill headless Service
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-prefill-hl-s0
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.clusterIP
+          value: None
+      - equal:
+          path: spec.publishNotReadyAddresses
+          value: false
+      - equal:
+          path: spec.selector["disaggregatedset.x-k8s.io/role"]
+          value: prefill
+
+  - it: pd-ds sets publishNotReadyAddresses=false on decode headless Service
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-decode-hl-s0
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.clusterIP
+          value: None
+      - equal:
+          path: spec.publishNotReadyAddresses
+          value: false
+      - equal:
+          path: spec.selector["disaggregatedset.x-k8s.io/role"]
+          value: decode
+
+  - it: pd-ds router resolves Ready-only role DNS at boot and passes crash-resilience flags to vllm-router
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'ci-prefill-hl-s0\.ci\.svc\.cluster\.local\.'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'ci-decode-hl-s0\.ci\.svc\.cluster\.local\.'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--disable-circuit-breaker'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--health-check-interval-secs 2'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--health-failure-threshold 2'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--health-check-timeout-secs 2'
+
+  - it: colocate router passes crash-resilience flags to vllm-router without DS preStop router wait on engines
+    template: templates/pd-colocate.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      pd.colocate: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--disable-circuit-breaker'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--health-check-interval-secs 2'
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
+          pattern: 'router-hl-s'
+
+  - it: pd-ds prefill and decode leaders carry downward-API coords and router-eviction preStop
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    asserts:
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].env
+          content:
+            name: PD_SLICE
+            valueFrom:
+              fieldRef:
+                fieldPath: "metadata.labels['disaggregatedset.x-k8s.io/slice']"
+      - matchRegex:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
+          pattern: 'router-hl-s'
+      - matchRegex:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
+          pattern: '/remove_worker'
+      - matchRegex:
+          path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
+          pattern: '\{PD_ROLE\}-hl-s'
+      - isNull:
+          path: spec.roles[0].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].lifecycle

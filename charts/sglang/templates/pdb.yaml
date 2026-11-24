@@ -172,7 +172,7 @@ spec:
       disaggregatedset.x-k8s.io/role: {{ $role }}
       disaggregatedset.x-k8s.io/slice: {{ $s | quote }}
 {{- end }}
-{{- $routerReplicas := int ($.Values.pd.router.replicas | default 1) }}
+{{- $routerReplicas := int ($.Values.pd.router.replicas | default 2) }}
 {{- if ge $routerReplicas 2 }}
 ---
 apiVersion: policy/v1

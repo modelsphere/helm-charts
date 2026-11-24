@@ -226,10 +226,9 @@ pd:
     schedulerName: ""
 
   router:
-    # A/B only. In colocate there is exactly one router CONTAINER per
-    # merged pod; this replicas is the per-slice router Deployment count
-    # (1, capped at 2 -- the router has no HA).
-    replicas: 1
+    # A/B only. In colocate there is one router CONTAINER per merged pod; this
+    # replicas is the per-slice router Deployment count (default 2, capped at 2).
+    replicas: 2
     # Forwarded verbatim as --policy.
     policy: cache_aware
     # smg is a SEPARATE image from the sglang engine image. The default below
@@ -257,11 +256,10 @@ pd:
     affinityReplace: null
     tolerationsReplace: null
     # Readiness. In both pd shapes the router container carries an exec
-    # startupProbe (180x30s = 90 minutes, matching the engines' load
-    # budget) + readinessProbe (30x5x3) that curls the engines' own
+    # startupProbe (1080x5s = 90 minutes, matching the engines' load
+    # budget) + readinessProbe (5x5x2 + draining) that curls the engines' own
     # /health -- prefill AND decode, direct, never through the router's
-    # own port. Only when both roles answer does the router read Ready,
-    # join the EndpointSlice and let traffic through. Without it the
+    # own port. Only when both roles answer does the router read Ready, join the EndpointSlice and let traffic through. Without it the
     # router would land in the Service as soon as its port opened --
     # before any engine exists -- and CART would 5xx user requests
     # instead of waiting.
