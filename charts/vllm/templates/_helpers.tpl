@@ -311,6 +311,21 @@
 {{- end -}}
 
 {{/*
+  Effective --api-server-count for lws.mode=dp. values.yaml defaults it to 1;
+  Helm's null-deletes-key merge removes the key from lws.dataParallel when a
+  user overrides apiServerCount to null, so a missing or nil value resolves to
+  0 (omit the flag), matching explicit 0. Takes the root context.
+*/}}
+{{- define "vllm.dpApiServerCount" -}}
+{{- $dp := .Values.lws.dataParallel | default dict -}}
+{{- if and (hasKey $dp "apiServerCount") (not (kindIs "invalid" $dp.apiServerCount)) -}}
+  {{- int $dp.apiServerCount -}}
+{{- else -}}
+  {{- 0 -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
   Reject extraArgs entries that restate flags the chart derives for a
   multi-node group (vLLM takes the last occurrence of a repeated flag).
   Takes dict "root" $ "args" <list> "label" <string>.
@@ -321,12 +336,7 @@
 {{- $derived := list "--nnodes" "--node-rank" "--master-addr" "--master-port" "--headless" "--distributed-executor-backend" -}}
 {{- if eq $mode "dp" -}}
   {{- $derived = list "--data-parallel-size" "--data-parallel-size-local" "--data-parallel-address" "--data-parallel-rpc-port" "--data-parallel-start-rank" "--headless" -}}
-  {{- $dp := $lws.dataParallel | default dict -}}
-  {{- $apiCount := 1 -}}
-  {{- if and (hasKey $dp "apiServerCount") (not (kindIs "invalid" $dp.apiServerCount)) -}}
-    {{- $apiCount = int $dp.apiServerCount -}}
-  {{- end -}}
-  {{- if gt $apiCount 0 -}}
+  {{- if gt (int (include "vllm.dpApiServerCount" .root)) 0 -}}
     {{- $derived = append $derived "--api-server-count" -}}
   {{- end -}}
 {{- end -}}

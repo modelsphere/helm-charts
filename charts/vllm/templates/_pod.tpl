@@ -219,10 +219,7 @@
 {{- $lwsMode := $lws.mode | default "mp" }}
 {{- $dp := $lws.dataParallel | default dict }}
 {{- $dpSizeLocal := int ($dp.sizeLocal | default 1) }}
-{{- $dpApiServerCount := 1 }}
-{{- if and (hasKey $dp "apiServerCount") (not (kindIs "invalid" $dp.apiServerCount)) }}
-{{- $dpApiServerCount = int $dp.apiServerCount }}
-{{- end }}
+{{- $dpApiServerCount := int (include "vllm.dpApiServerCount" $root) }}
 {{- $dpResolveLeader := true }}
 {{- if and (hasKey $dp "resolveLeaderAddress") (not (kindIs "invalid" $dp.resolveLeaderAddress)) }}
 {{- $dpResolveLeader = $dp.resolveLeaderAddress }}

@@ -161,6 +161,36 @@ tests:
       - failedTemplate:
           errorPattern: "extraArgs carries \"--api-server-count=2\""
 
+  - it: lws.mode=dp emits --api-server-count=1 by default when dataParallel is not overridden
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: dp
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--api-server-count=1'"
+
+  - it: lws.mode=dp omits --api-server-count when apiServerCount is null
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: dp
+      lws.dataParallel:
+        apiServerCount: null
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-size=2'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-size-local=1'"
+      - notMatchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "--api-server-count"
+
   - it: lws.mode=dp allows --api-server-count in extraArgs when apiServerCount is 0
     template: templates/lws.yaml
     set:
@@ -169,6 +199,25 @@ tests:
       lws.mode: dp
       lws.dataParallel:
         apiServerCount: 0
+      extraArgs:
+        - "--api-server-count=2"
+        - "--data-parallel-hybrid-lb"
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--api-server-count=2'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-hybrid-lb'"
+
+  - it: lws.mode=dp allows --api-server-count in extraArgs when apiServerCount is null
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: dp
+      lws.dataParallel:
+        apiServerCount: null
       extraArgs:
         - "--api-server-count=2"
         - "--data-parallel-hybrid-lb"
