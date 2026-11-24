@@ -180,7 +180,7 @@ tests:
           pattern: 'check "ci-prefill-hl-s0\.ci\.svc\.cluster\.local\." "8001" "/health" \|\| '
       - matchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
-          pattern: 'check "prefill" "ci-prefill-ready-hl-s0\.ci\.svc\.cluster\.local\." prefill-ips "8001" "/health"'
+          pattern: 'check "prefill" "ci-prefill-hl-s0\.ci\.svc\.cluster\.local\." prefill-ips "8001" "/health"'
       - notMatchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
           pattern: '127\.0\.0\.1'
@@ -313,11 +313,11 @@ tests:
           path: spec.minAvailable
           value: 1
 
-  - it: pd-ds renders Ready-only headless Services for prefill and decode
+  - it: pd-ds sets publishNotReadyAddresses=false on prefill headless Service
     template: templates/pd-ds.yaml
     documentSelector:
       path: metadata.name
-      value: ci-prefill-ready-hl-s0
+      value: ci-prefill-hl-s0
     asserts:
       - isKind:
           of: Service
@@ -331,11 +331,11 @@ tests:
           path: spec.selector["disaggregatedset.x-k8s.io/role"]
           value: prefill
 
-  - it: pd-ds renders Ready-only headless Service for decode
+  - it: pd-ds sets publishNotReadyAddresses=false on decode headless Service
     template: templates/pd-ds.yaml
     documentSelector:
       path: metadata.name
-      value: ci-decode-ready-hl-s0
+      value: ci-decode-hl-s0
     asserts:
       - isKind:
           of: Service
@@ -349,7 +349,7 @@ tests:
           path: spec.selector["disaggregatedset.x-k8s.io/role"]
           value: decode
 
-  - it: pd-ds router prefers Ready-only DNS at boot and passes crash-resilience flags to vllm-router
+  - it: pd-ds router resolves Ready-only role DNS at boot and passes crash-resilience flags to vllm-router
     template: templates/pd-ds.yaml
     documentSelector:
       path: metadata.name
@@ -357,10 +357,10 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].args[0]
-          pattern: 'ci-prefill-ready-hl-s0\.ci\.svc\.cluster\.local\.'
+          pattern: 'ci-prefill-hl-s0\.ci\.svc\.cluster\.local\.'
       - matchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].args[0]
-          pattern: 'ci-decode-ready-hl-s0\.ci\.svc\.cluster\.local\.'
+          pattern: 'ci-decode-hl-s0\.ci\.svc\.cluster\.local\.'
       - matchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].args[0]
           pattern: '--disable-circuit-breaker'
@@ -420,6 +420,6 @@ tests:
           pattern: '/remove_worker'
       - matchRegex:
           path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
-          pattern: 'ready-hl-s'
+          pattern: '\{PD_ROLE\}-hl-s'
       - isNull:
           path: spec.roles[0].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].lifecycle

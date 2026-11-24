@@ -14,7 +14,7 @@ with stubbed DNS and URL rewriting, verifying:
   3. Router-2-in-preStop race: len(routers) < router.replicas holds wait even
      when the remaining router has already dropped this pod, until all routers
      are Ready again.
-  4. Atomic rollout / 1->0 escape hatch: no surviving peers in *-ready-hl ->
+  4. Atomic rollout / 1->0 escape hatch: no surviving peers in *-hl-s* ->
      skips router wait.
   5. Last-worker escape hatch: router lists only 1 worker of role -> does not
      send DELETE/remove_worker and skips wait.
@@ -366,7 +366,7 @@ def run_suite_for_chart(chart_name: str, chart_path: str) -> None:
     my_url = f"http://{my_ip}:{eport}"
     peer_url = f"http://{peer_ip}:{eport}"
     decode_url = f"http://10.0.0.9:{eport + 1}"
-    ready_fqdn = "ci-prefill-ready-hl-s0.ci.svc.cluster.local."
+    ready_fqdn = "ci-prefill-hl-s0.ci.svc.cluster.local."
     router_fqdn = "ci-router-hl-s0.ci.svc.cluster.local."
 
     script = render_prestop(chart_path, eport, rport)

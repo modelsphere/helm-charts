@@ -114,36 +114,16 @@ data:
        LeaderTemplate/WorkerTemplate). worker-index: "0" selects the group
        leaders only -- the only pods serving HTTP. The chart's own `app` label
        cannot be used as the selector key here because the LWS controller
-       re-derives it as "<ds-name>-<role>". publishNotReadyAddresses lets the
-       router resolve upstreams while the engines are still loading. */}}
+       re-derives it as "<ds-name>-<role>". publishNotReadyAddresses: false
+       ensures wait-upstreams, router boot, and drift shrink only see Ready,
+       non-Terminating engines (Terminating pods drop out in ~1-2s while preStop
+       is still running). */}}
 {{- range $s := until $slices }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ $fullname }}-prefill-hl-s{{ $s }}
-  namespace: {{ $root.Release.Namespace }}
-  labels:
-    app: {{ $root.Release.Name }}-sglang
-spec:
-  clusterIP: None
-  publishNotReadyAddresses: true
-  selector:
-    disaggregatedset.x-k8s.io/name: {{ $fullname }}
-    disaggregatedset.x-k8s.io/role: prefill
-    disaggregatedset.x-k8s.io/slice: "{{ $s }}"
-    leaderworkerset.sigs.k8s.io/worker-index: "0"
-  ports:
-  - { name: http-prefill, port: {{ $pd.prefill.httpPort | default 30001 }}, targetPort: http-prefill }
----
-# Ready-only headless Services for post-boot router discovery & shrink drift:
-# publishNotReadyAddresses: false drops Terminating pods from DNS in ~1-2s
-# while preStop is still running, whereas *-hl-s* keeps NotReady endpoints
-# visible so wait-upstreams and cold boot can resolve engines during load.
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ $fullname }}-prefill-ready-hl-s{{ $s }}
   namespace: {{ $root.Release.Namespace }}
   labels:
     app: {{ $root.Release.Name }}-sglang
@@ -162,24 +142,6 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ $fullname }}-decode-hl-s{{ $s }}
-  namespace: {{ $root.Release.Namespace }}
-  labels:
-    app: {{ $root.Release.Name }}-sglang
-spec:
-  clusterIP: None
-  publishNotReadyAddresses: true
-  selector:
-    disaggregatedset.x-k8s.io/name: {{ $fullname }}
-    disaggregatedset.x-k8s.io/role: decode
-    disaggregatedset.x-k8s.io/slice: "{{ $s }}"
-    leaderworkerset.sigs.k8s.io/worker-index: "0"
-  ports:
-  - { name: http-decode, port: {{ $pd.decode.httpPort | default 30002 }}, targetPort: http-decode }
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ $fullname }}-decode-ready-hl-s{{ $s }}
   namespace: {{ $root.Release.Namespace }}
   labels:
     app: {{ $root.Release.Name }}-sglang
@@ -303,16 +265,11 @@ spec:
           # does NOT count toward the full set -- it only refuses to exec with
           # an EMPTY role list, which would be a router that can never route.
           # Mid-life growth and shrinkage are both the drift liveness probe's:
-          # it restarts this container to re-bake argv (shrinkage only once
-          # the dropped address stops serving or serves another engine, so a
-          # DNS flicker never restarts the router). publishNotReadyAddresses is what
-          # makes placement observable at all -- the address appears as soon as
-          # the pod has an IP, so this sees scheduled engines, not just Ready
-          # ones.
+          # it restarts this container to re-bake argv. Because *-hl-s* uses
+          # publishNotReadyAddresses: false, Ready engines appear once healthy
+          # and Terminating engines drop immediately while still in preStop.
           PF_HL={{ $fullname }}-prefill-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
           DC_HL={{ $fullname }}-decode-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
-          PF_READY_HL={{ $fullname }}-prefill-ready-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
-          DC_READY_HL={{ $fullname }}-decode-ready-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
           # One loop wraps resolve + identity probe + argv build: an IP that
           # hard-refuses its sidecar probe (terminating pod still advertised
           # by the headless service) is dropped from argv, and if that empties
@@ -327,21 +284,8 @@ spec:
           i=0
           while :; do
             i=$((i+1))
-            # Prefer Ready-only DNS so a restarted router never re-includes a
-            # Terminating engine; fall back to all-addresses DNS on cold boot
-            # while engines are still loading weights.
-            PF_SRC="$PF_READY_HL"
-            PF_IPS=$(getent hosts "$PF_READY_HL" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u || true)
-            if [ -z "$PF_IPS" ]; then
-              PF_SRC="$PF_HL"
-              PF_IPS=$(getent hosts "$PF_HL" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u || true)
-            fi
-            DC_SRC="$DC_READY_HL"
-            DC_IPS=$(getent hosts "$DC_READY_HL" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u || true)
-            if [ -z "$DC_IPS" ]; then
-              DC_SRC="$DC_HL"
-              DC_IPS=$(getent hosts "$DC_HL" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u || true)
-            fi
+            PF_IPS=$(getent hosts "$PF_HL" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u || true)
+            DC_IPS=$(getent hosts "$DC_HL" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u || true)
             if [ -z "$PF_IPS" ] || [ -z "$DC_IPS" ]; then
               echo "router: slice {{ $s }} upstreams not yet resolving (prefill: '${PF_IPS:-none}', decode: '${DC_IPS:-none}'; attempt $i)" >&2
               sleep 5
@@ -486,8 +430,8 @@ spec:
             mv "$T" "/tmp/pd-router/${role}-ips"
             echo "${kept# }"
           }
-          PF_KEPT=$(write_role_snapshot prefill "$PF_SRC" "$PF_IPS")
-          DC_KEPT=$(write_role_snapshot decode  "$DC_SRC" "$DC_IPS")
+          PF_KEPT=$(write_role_snapshot prefill "$PF_HL" "$PF_IPS")
+          DC_KEPT=$(write_role_snapshot decode  "$DC_HL" "$DC_IPS")
           if [ -z "$PF_KEPT" ] || [ -z "$DC_KEPT" ]; then
             echo "router: slice {{ $s }} after dead-ip filter: prefill='${PF_KEPT:-none}', decode='${DC_KEPT:-none}';" \
                  "returning to DNS resolve (attempt $i)" >&2
@@ -535,15 +479,13 @@ spec:
              "decode"  (dict "host" (printf "%s-decode-hl-s%d.%s.svc.cluster.local."  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort  | default 30002) "path" "/health")
              "router"  (dict "host" "127.0.0.1" "port" $root.Values.service.port "path" "/readiness") }}
         {{- include "sglang.pdRouterProbes" (dict "roles" $probeRoles) | nindent 8 }}
-        {{- /* Drift liveness watches Ready-only headless Services so a
-               Terminating engine drops out of DNS while still in preStop,
-               triggering staggered router restarts before it exits. When running
-               >= 2 router replicas, gate restarts behind a peer-readiness
-               stagger so the slice stays online. */}}
-        {{- $livenessRoles := dict
-             "prefill" (dict "host" (printf "%s-prefill-ready-hl-s%d.%s.svc.cluster.local." $fullname $s $root.Release.Namespace) "port" ($pd.prefill.httpPort | default 30001) "path" "/health")
-             "decode"  (dict "host" (printf "%s-decode-ready-hl-s%d.%s.svc.cluster.local."  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort  | default 30002) "path" "/health") }}
-        {{- $livenessArgs := dict "root" $root "roles" $livenessRoles }}
+        {{- /* Drift liveness watches the Ready-only role headless Services
+               (*-hl-s* has publishNotReadyAddresses: false) so a Terminating
+               engine drops out of DNS while still in preStop, triggering
+               staggered router restarts before it exits. When running >= 2
+               router replicas, gate restarts behind a peer-readiness stagger
+               so the slice stays online. */}}
+        {{- $livenessArgs := dict "root" $root "roles" $probeRoles }}
         {{- if ge $routerReplicas 2 }}
         {{- $_ := set $livenessArgs "peer" (dict "host" (printf "%s-router-hl-s%d.%s.svc.cluster.local." $fullname $s $root.Release.Namespace) "port" $root.Values.service.port "path" "/readiness") }}
         {{- end }}

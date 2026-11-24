@@ -48,8 +48,8 @@ cat "$W/now"
 EOF
 chmod +x "$W/bin/getent" "$W/bin/python3" "$W/bin/date"
 
-PF=ci-prefill-ready-hl-s0.ci.svc.cluster.local.
-DC=ci-decode-ready-hl-s0.ci.svc.cluster.local.
+PF=ci-prefill-hl-s0.ci.svc.cluster.local.
+DC=ci-decode-hl-s0.ci.svc.cluster.local.
 ROUTER_HL=ci-router-hl-s0.ci.svc.cluster.local.
 VALUES=(-n ci --set modelRoute.nginx.outputConfigMap=ci/openresty-conf
   --set pd.enabled=true --set rdma.enabled=true --set scaler.enabled=false

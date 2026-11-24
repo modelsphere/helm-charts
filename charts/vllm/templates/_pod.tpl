@@ -1256,10 +1256,11 @@ check() {
   # router in its boot loop waiting on that role.
   [ -n "$resolved" ] && [ "$all_resolve" -eq 1 ] || return 0
   # Shrink: an argv IP missing from a non-empty Ready-only DNS answer.
-  # CoreDNS drops Terminating pods from *-ready-hl-s* while they are still
-  # alive and serving /health inside preStop, so fire immediately without
-  # waiting for serving "$ip" to fail (guarded above by non-empty $resolved
-  # and $all_resolve=1, 2x10s failureThreshold, and peer-gated stagger).
+  # CoreDNS drops Terminating pods from *-hl-s* (publishNotReadyAddresses: false)
+  # while they are still alive and serving /health inside preStop, so fire
+  # immediately without waiting for serving "$ip" to fail (guarded above by
+  # non-empty $resolved and $all_resolve=1, 2x10s failureThreshold, and
+  # peer-gated stagger).
   while IFS='|' read -r ip _; do
     [ -n "$ip" ] || continue
     printf '%s\n' "$resolved" | grep -qxF "$ip" && continue
@@ -1478,7 +1479,7 @@ ROUTER_REPLICAS = {{ int ($root.Values.pd.router.replicas | default 2) }}
 ROUTER_WAIT_CAP = min(240, {{ $preStop.drainSeconds }})
 if POD_IP and PD_SLICE:
     ROUTER_HL = f"{FULLNAME}-router-hl-s{PD_SLICE}.{NS}.svc.cluster.local."
-    ROLE_READY_HL = f"{FULLNAME}-{PD_ROLE}-ready-hl-s{PD_SLICE}.{NS}.svc.cluster.local."
+    ROLE_HL = f"{FULLNAME}-{PD_ROLE}-hl-s{PD_SLICE}.{NS}.svc.cluster.local."
     MY_URL = f"http://{POD_IP}:{HTTP_PORT}"
 
     def resolve_ips(host):
@@ -1518,11 +1519,11 @@ if POD_IP and PD_SLICE:
     waited_routers = False
     no_survivor_streak = 0
     while time.monotonic() < router_deadline:
-        surviving = [ip for ip in resolve_ips(ROLE_READY_HL) if ip != POD_IP]
+        surviving = [ip for ip in resolve_ips(ROLE_HL) if ip != POD_IP]
         if not surviving:
             no_survivor_streak += 1
             if no_survivor_streak >= 2:
-                log(f"no surviving Ready peers in {ROLE_READY_HL}; skipping router wait")
+                log(f"no surviving Ready peers in {ROLE_HL}; skipping router wait")
                 break
         else:
             no_survivor_streak = 0
