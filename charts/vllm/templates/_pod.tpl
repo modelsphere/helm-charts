@@ -531,8 +531,6 @@
   {{- $pdDsLeader := and $pdRole (not $colocate) $serves }}
   {{- $pdRoleName := ternary "decode" "prefill" (hasPrefix "decode-" $role) }}
   {{- if $pdDsLeader }}
-  {{- /* Downward API coordinates used by PD preStop to wait for routers in
-         this slice to drop this pod before terminating. */}}
   {{- $engineEnv = concat $engineEnv (list
         (dict "name" "POD_IP" "valueFrom" (dict "fieldRef" (dict "fieldPath" "status.podIP")))
         (dict "name" "PD_SLICE" "valueFrom" (dict "fieldRef" (dict "fieldPath" "metadata.labels['disaggregatedset.x-k8s.io/slice']")))) }}
@@ -1054,9 +1052,7 @@ tolerations:
   Emits startupProbe and readinessProbe back-to-back at the caller's
   indent. startupProbe carries the engines' 90-minute load budget so a
   router pod scheduled before its engines have loaded is not
-  liveness-restarted. readinessProbe ticks at 5s (plus a preStop draining
-  sentinel check) so a restarting router flips NotReady within <=10s before
-  taking SIGTERM and recovers in ~5s after restart.
+  liveness-restarted. readinessProbe ticks at 5s (plus draining sentinel).
 
   The probe runs python3+urllib, never curl or wget: vllm/vllm-router
   is a Rust-binary image that ships neither (same constraint the
@@ -1088,8 +1084,6 @@ if [ -f /tmp/pd-router/draining ]; then
 fi
 check() {
   local src=$1 port=$2 path=$3
-  # DNS name -> resolve and probe all IPs in one python3 call (2s/IP < 5s probe timeout).
-  # IP literal -> probe directly (vllm-router image ships python3, not curl/wget).
   case "$src" in
     *[!0-9.]*)
       local ips
@@ -1255,12 +1249,7 @@ check() {
   # resolver blip or an atomic re-roll, and a restart then only parks the
   # router in its boot loop waiting on that role.
   [ -n "$resolved" ] && [ "$all_resolve" -eq 1 ] || return 0
-  # Shrink: an argv IP missing from a non-empty Ready-only DNS answer.
-  # CoreDNS drops Terminating pods from *-hl-s* (publishNotReadyAddresses: false)
-  # while they are still alive and serving /health inside preStop, so fire
-  # immediately without waiting for serving "$ip" to fail (guarded above by
-  # non-empty $resolved and $all_resolve=1, 2x10s failureThreshold, and
-  # peer-gated stagger).
+  # Shrink: argv IP left Ready DNS.
   while IFS='|' read -r ip _; do
     [ -n "$ip" ] || continue
     printf '%s\n' "$resolved" | grep -qxF "$ip" && continue
@@ -1283,10 +1272,7 @@ check {{ $role | quote }} {{ $target.host | quote }} {{ $role }}-ips {{ $target.
 {{- end }}
 {{- end }}
 {{- with .peer }}
-# Stagger drift restarts across router replicas (only when rc != 0):
-#   1. Hold if already draining or POD_IP is unset.
-#   2. Bypass if self is NotReady (not in Ready DNS + /readiness failing) to avoid deadlock.
-#   3. Require >=2 Ready peers, own 90s slot [0, 60) (30s guard band), and a live peer.
+# Peer-gated 90s stagger (bypass if self NotReady).
 if [ "$rc" -ne 0 ]; then
   my_ip="${POD_IP:-}"
   if [ -f /tmp/pd-router/draining ]; then
@@ -1463,11 +1449,7 @@ def hung():
 
 deadline = time.monotonic() + {{ $preStop.drainSeconds }}
 {{- if $pdDs }}
-# Wait for all Ready PD routers in this slice to stop routing to this pod
-# before draining in-flight requests and terminating. Best-effort POST
-# /remove_worker cuts wait time on dp_size==1; GET /workers polling closes
-# the gap if remove_worker fails, silently no-ops on @rank, or a peer is
-# mid-preStop.
+# Evict from Ready PD routers before draining in-flight requests.
 POD_IP = os.environ.get("POD_IP", "")
 PD_SLICE = os.environ.get("PD_SLICE", "")
 FULLNAME = {{ include "vllm.fullname" $root | quote }}

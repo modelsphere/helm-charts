@@ -223,9 +223,6 @@ def run_prestop(script: str, state: MockState) -> list[str]:
     servers = start_mock_server(state, router_ports, engine_ports)
     real_engine_port = engine_ports[0]
 
-    # Strip trailing os.kill(1, SIGTERM) just in case (kill=true isn't enabled on
-    # default non-LWS DS templates unless lifecycle.preStopKill is true, wait:
-    # preStopKill IS true by default! So keep os.kill mocked cleanly).
     orig_getaddrinfo = socket.getaddrinfo
     orig_open = urllib.request.OpenerDirector.open
     orig_sleep = time.sleep
@@ -301,8 +298,6 @@ def run_prestop(script: str, state: MockState) -> list[str]:
 
         ns: dict = {}
         code = compile(wrapped_script, f"prestop-{state.chart_name}.py", "exec")
-        # Inject a wrapper around open('/proc/1/fd/1')? Simpler: override built-in log after defining defs?
-        # Even simpler: run until def log, or hook builtins.open for /proc/1/fd/1!
         import builtins
 
         orig_builtin_open = builtins.open

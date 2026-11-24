@@ -114,10 +114,8 @@ data:
        (LeaderWorkerSetManager.Create merges GenerateLabels into
        LeaderTemplate/WorkerTemplate). The chart's own `app` label cannot be
        used as the selector key here because the LWS controller re-derives it
-       as "<ds-name>-<role>". publishNotReadyAddresses: false ensures
-       wait-upstreams, router boot, and drift shrink only see Ready,
-       non-Terminating engines (Terminating pods drop out in ~1-2s while preStop
-       is still running).
+       as "<ds-name>-<role>". publishNotReadyAddresses: false exposes Ready
+       engines only.
 
        worker-index: "0" is unconditional on both roles: an LWS group's
        leader is the only member serving HTTP (workers run --headless), and
@@ -188,8 +186,6 @@ metadata:
     app: {{ $root.Release.Name }}-vllm
 spec:
   clusterIP: None
-  # Deliberately false: the drift liveness stagger uses this Service to count
-  # Ready, non-Terminating router peers in this slice.
   publishNotReadyAddresses: false
   selector:
     app: {{ $root.Release.Name }}-vllm
@@ -296,10 +292,7 @@ spec:
           # get back to serving ASAP with whatever is placed now. So this loop
           # does NOT count toward the full set -- it only refuses to exec with
           # an EMPTY role list, which would be a router that can never route.
-          # Mid-life growth and shrinkage are both the drift liveness probe's:
-          # it restarts this container to re-bake argv. Because *-hl-s* uses
-          # publishNotReadyAddresses: false, Ready engines appear once healthy
-          # and Terminating engines drop immediately while still in preStop.
+          # Mid-life growth/shrinkage restarts this container via Ready-only DNS.
           #
           # The two backend flavours of argv differ by side channel:
           #   - nixl     : no bootstrap port to propagate, no extra router
@@ -453,12 +446,7 @@ spec:
             "decode"  (dict "host" (printf "%s-decode-hl-s%d.%s.svc.cluster.local."  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort | default 8002) "path" "/health")
             "router"  (dict "host" "127.0.0.1" "port" $root.Values.service.port "path" "/readiness") }}
         {{- include "vllm.pdRouterProbes" (dict "roles" $probeRoles) | nindent 8 }}
-        {{- /* Drift liveness watches the Ready-only role headless Services
-               (*-hl-s* has publishNotReadyAddresses: false) so a Terminating
-               engine drops out of DNS while still in preStop, triggering
-               staggered router restarts before it exits. When running >= 2
-               router replicas, gate restarts behind a peer-readiness stagger
-               so the slice stays online. */}}
+        {{- /* Drift liveness (peer-staggered when replicas >= 2). */}}
         {{- $livenessArgs := dict "root" $root "roles" $probeRoles }}
         {{- if ge $routerReplicas 2 }}
         {{- $_ := set $livenessArgs "peer" (dict "host" (printf "%s-router-hl-s%d.%s.svc.cluster.local." $fullname $s $root.Release.Namespace) "port" $root.Values.service.port "path" "/readiness") }}
