@@ -159,6 +159,28 @@ spec:
   ports:
   - { name: http-prefill, port: {{ $pd.prefill.httpPort | default 8001 }}, targetPort: http-prefill }
 ---
+# Ready-only headless Services for post-boot router discovery & shrink drift:
+# publishNotReadyAddresses: false drops Terminating pods from DNS in ~1-2s
+# while preStop is still running, whereas *-hl-s* keeps NotReady endpoints
+# visible so wait-upstreams and cold boot can resolve engines during load.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-prefill-ready-hl-s{{ $s }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app: {{ $root.Release.Name }}-vllm
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    disaggregatedset.x-k8s.io/name: {{ $fullname }}
+    disaggregatedset.x-k8s.io/role: prefill
+    disaggregatedset.x-k8s.io/slice: "{{ $s }}"
+    leaderworkerset.sigs.k8s.io/worker-index: "0"
+  ports:
+  - { name: http-prefill, port: {{ $pd.prefill.httpPort | default 8001 }}, targetPort: http-prefill }
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -169,6 +191,24 @@ metadata:
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
+  selector:
+    disaggregatedset.x-k8s.io/name: {{ $fullname }}
+    disaggregatedset.x-k8s.io/role: decode
+    disaggregatedset.x-k8s.io/slice: "{{ $s }}"
+    leaderworkerset.sigs.k8s.io/worker-index: "0"
+  ports:
+  - { name: http-decode, port: {{ $pd.decode.httpPort | default 8002 }}, targetPort: http-decode }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-decode-ready-hl-s{{ $s }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    app: {{ $root.Release.Name }}-vllm
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
   selector:
     disaggregatedset.x-k8s.io/name: {{ $fullname }}
     disaggregatedset.x-k8s.io/role: decode
@@ -320,6 +360,8 @@ spec:
           #                demand.
           PF_HL={{ $fullname }}-prefill-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
           DC_HL={{ $fullname }}-decode-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
+          PF_READY_HL={{ $fullname }}-prefill-ready-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
+          DC_READY_HL={{ $fullname }}-decode-ready-hl-s{{ $s }}.{{ $root.Release.Namespace }}.svc.cluster.local.
           # No attempt cap: an empty role is an engine set that is not placed
           # yet (atomic re-roll, insufficient GPUs), and exiting only turns
           # that wait into CrashLoopBackOff, whose backoff then delays the
@@ -328,8 +370,17 @@ spec:
           i=0
           while :; do
             i=$((i+1))
-            PF_IPS=$(getent hosts "$PF_HL" | awk '{print $1}' | sort -u)
-            DC_IPS=$(getent hosts "$DC_HL" | awk '{print $1}' | sort -u)
+            # Prefer Ready-only DNS so a restarted router never re-includes a
+            # Terminating engine; fall back to all-addresses DNS on cold boot
+            # while engines are still loading weights.
+            PF_IPS=$(getent hosts "$PF_READY_HL" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u || true)
+            if [ -z "$PF_IPS" ]; then
+              PF_IPS=$(getent hosts "$PF_HL" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u || true)
+            fi
+            DC_IPS=$(getent hosts "$DC_READY_HL" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u || true)
+            if [ -z "$DC_IPS" ]; then
+              DC_IPS=$(getent hosts "$DC_HL" 2>/dev/null | awk '{print $1}' | LC_ALL=C sort -u || true)
+            fi
             [ -n "$PF_IPS" ] && [ -n "$DC_IPS" ] && break
             echo "router: slice {{ $s }} upstreams not yet resolving (prefill: '${PF_IPS:-none}', decode: '${DC_IPS:-none}'; attempt $i)"
             sleep 5
@@ -431,6 +482,10 @@ spec:
             --vllm-pd-disaggregation \
             $PF_ARGS $DC_ARGS \
             --policy {{ $pd.router.policy | default "round_robin" }} \
+            --disable-circuit-breaker \
+            --health-check-interval-secs 2 \
+            --health-failure-threshold 2 \
+            --health-check-timeout-secs 2 \
             --host 0.0.0.0 \
             --port {{ $root.Values.service.port }}{{ if eq $backend "mooncake" }} \
             --kv-connector mooncake{{ end }}
@@ -450,12 +505,15 @@ spec:
             "decode"  (dict "host" (printf "%s-decode-hl-s%d.%s.svc.cluster.local."  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort | default 8002) "path" "/health")
             "router"  (dict "host" "127.0.0.1" "port" $root.Values.service.port "path" "/readiness") }}
         {{- include "vllm.pdRouterProbes" (dict "roles" $probeRoles) | nindent 8 }}
-        {{- /* Drift liveness: restart the router if a new prefill/decode IP
-               appears in DNS after boot -- argv is immutable and the running
-               router can never learn about post-boot upstreams. When running
+        {{- /* Drift liveness watches Ready-only headless Services so a
+               Terminating engine drops out of DNS while still in preStop,
+               triggering staggered router restarts before it exits. When running
                >= 2 router replicas, gate restarts behind a peer-readiness
                stagger so the slice stays online. */}}
-        {{- $livenessArgs := dict "root" $root "roles" $probeRoles }}
+        {{- $livenessRoles := dict
+            "prefill" (dict "host" (printf "%s-prefill-ready-hl-s%d.%s.svc.cluster.local." $fullname $s $root.Release.Namespace) "port" ($pd.prefill.httpPort | default 8001) "path" "/health")
+            "decode"  (dict "host" (printf "%s-decode-ready-hl-s%d.%s.svc.cluster.local."  $fullname $s $root.Release.Namespace) "port" ($pd.decode.httpPort  | default 8002) "path" "/health") }}
+        {{- $livenessArgs := dict "root" $root "roles" $livenessRoles }}
         {{- if ge $routerReplicas 2 }}
         {{- $_ := set $livenessArgs "peer" (dict "host" (printf "%s-router-hl-s%d.%s.svc.cluster.local." $fullname $s $root.Release.Namespace) "port" $root.Values.service.port "path" "/readiness") }}
         {{- end }}

@@ -48,8 +48,8 @@ cat "$W/now"
 EOF
 chmod +x "$W/bin/getent" "$W/bin/python3" "$W/bin/date"
 
-PF=ci-prefill-hl-s0.ci.svc.cluster.local.
-DC=ci-decode-hl-s0.ci.svc.cluster.local.
+PF=ci-prefill-ready-hl-s0.ci.svc.cluster.local.
+DC=ci-decode-ready-hl-s0.ci.svc.cluster.local.
 ROUTER_HL=ci-router-hl-s0.ci.svc.cluster.local.
 VALUES=(-n ci --set modelRoute.nginx.outputConfigMap=ci/openresty-conf
   --set pd.enabled=true --set rdma.enabled=true --set scaler.enabled=false
@@ -124,9 +124,9 @@ for chart in "$@"; do
   reset; echo 10.0.0.3 >>"$W/dns/$PF";                       expect "$P" 0 "growth: new IP still loading"
   reset; echo '1|t1b' >"$W/id/10.0.0.1";                     expect "$P" 1 "engine restarted in place (identity changed)"
   reset; dead 10.0.0.2;                                      expect "$P" 0 "engine down but still in DNS"
-  # Shrink.
-  reset; echo 10.0.0.1 >"$W/dns/$PF";                        expect "$P" 0 "DNS flicker: dropped IP alive, same identity"
-  reset; echo 10.0.0.1 >"$W/dns/$PF"; rm "$W/id/10.0.0.2";   expect "$P" 0 "DNS flicker: dropped IP alive, identity silent"
+  # Shrink (Ready-only DNS drops Terminating pods even while /health still answers).
+  reset; echo 10.0.0.1 >"$W/dns/$PF";                        expect "$P" 1 "terminating: dropped from Ready DNS while still serving"
+  reset; echo 10.0.0.1 >"$W/dns/$PF"; rm "$W/id/10.0.0.2";   expect "$P" 1 "terminating: dropped from Ready DNS, identity silent"
   reset; echo 10.0.0.1 >"$W/dns/$PF"; dead 10.0.0.2;         expect "$P" 1 "scale-down: dropped IP dead"
   reset; echo 10.0.0.1 >"$W/dns/$PF"; echo '3|x' >"$W/id/10.0.0.2"; expect "$P" 1 "IP reuse: dropped IP serves another engine"
   reset; echo 10.0.0.1 >"$W/dns/$PF"; dead 10.0.0.2; : >"$W/dns/$DC"; dead 10.0.0.9
@@ -135,13 +135,13 @@ for chart in "$@"; do
   echo 10.0.0.1 >"$W/dns/$PF"; dead 10.0.0.2
   expect "$P" 1 "large scale-down: several dropped IPs dead"
   calls=$(grep -cv '^10\.0\.0\.1$' "$W/calls")
-  if [ "$calls" -eq 1 ]; then echo "ok    large scale-down probes one dead IP, not each"
-  else echo "FAIL  large scale-down probed $calls dead IPs, want 1"; fail=1; fi
+  if [ "$calls" -eq 0 ]; then echo "ok    large scale-down does not probe dropped IPs"
+  else echo "FAIL  large scale-down probed $calls dropped IPs, want 0"; fail=1; fi
 
-  # Without hang-watcher there is no identity: shrink still works on "down",
-  # a reused address that serves cannot be told from the original engine.
+  # Without hang-watcher there is no identity: Ready-only shrink still fires
+  # immediately when DNS drops an IP.
   render "$chart" "$P" --set pd.router.replicas=1 --set hangWatcher.enabled=false || { fail=1; continue; }
-  reset; echo 10.0.0.1 >"$W/dns/$PF";                        expect "$P" 0 "no hang-watcher: DNS flicker, engine alive"
+  reset; echo 10.0.0.1 >"$W/dns/$PF";                        expect "$P" 1 "no hang-watcher: terminating pod dropped from Ready DNS"
   reset; echo 10.0.0.1 >"$W/dns/$PF"; dead 10.0.0.2;         expect "$P" 1 "no hang-watcher: scale-down"
 
   # Multi-replica (default pd.router.replicas=2): stagger prevents both router pods from restarting together.

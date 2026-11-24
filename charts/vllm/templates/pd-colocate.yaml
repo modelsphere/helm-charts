@@ -133,6 +133,10 @@ spec:
             --prefill http://127.0.0.1:{{ $pd.prefill.httpPort | default 8001 }} \
             --decode  http://127.0.0.1:{{ $pd.decode.httpPort | default 8002 }} \
             --policy {{ $pd.router.policy | default "round_robin" }} \
+            --disable-circuit-breaker \
+            --health-check-interval-secs 2 \
+            --health-failure-threshold 2 \
+            --health-check-timeout-secs 2 \
             --host 0.0.0.0 \
             --port {{ $root.Values.service.port }}
         # Port name is router-http, NOT http: the prefill engine in this same

@@ -487,6 +487,16 @@
        list. Implement by pre-merging roleCfg.env over $root.Values.env,
        then handing the union to mergeEnv as its "user" side. Non-pd
        callers pass no roleCfg.env and the chain is a no-op. */}}
+  {{- $colocate := .colocate | default false }}
+  {{- $pdDsLeader := and $pdRole (not $colocate) $serves }}
+  {{- $pdRoleName := ternary "decode" "prefill" (hasPrefix "decode-" $role) }}
+  {{- if $pdDsLeader }}
+  {{- /* Downward API coordinates used by PD preStop to wait for routers in
+         this slice to drop this pod before terminating. */}}
+  {{- $chartEnv = concat $chartEnv (list
+        (dict "name" "POD_IP" "valueFrom" (dict "fieldRef" (dict "fieldPath" "status.podIP")))
+        (dict "name" "PD_SLICE" "valueFrom" (dict "fieldRef" (dict "fieldPath" "metadata.labels['disaggregatedset.x-k8s.io/slice']")))) }}
+  {{- end }}
   {{- $userEnv := $root.Values.env | default list }}
   {{- if $pdRole }}
   {{- $userEnv = concat $userEnv ($roleCfg.env | default list) }}
@@ -641,7 +651,7 @@
           # all. Wanting the fallback without giving up the drain is a legitimate
           # combination, so they stay separate switches.
           - |
-            {{- include "sglang.preStopScript" (dict "root" $root "serves" $serves "kill" (ternary $lws.leaderPreStopKill $root.Values.lifecycle.preStopKill $multi) "httpPort" $httpPort "hwPort" $hwPort) | nindent 14 }}
+            {{- include "sglang.preStopScript" (dict "root" $root "serves" $serves "kill" (ternary $lws.leaderPreStopKill $root.Values.lifecycle.preStopKill $multi) "httpPort" $httpPort "hwPort" $hwPort "pdDs" $pdDsLeader "pdRoleName" $pdRoleName) | nindent 14 }}
   {{- end }}
   {{- if $serves }}
   {{- with $root.Values.startupProbe }}
@@ -1262,31 +1272,15 @@ check() {
   # resolver blip or an atomic re-roll, and a restart then only parks the
   # router in its boot loop waiting on that role.
   [ -n "$resolved" ] && [ "$all_resolve" -eq 1 ] || return 0
-  # Shrink: an argv IP missing from a non-empty answer. DNS alone never
-  # decides -- a partial answer is the flicker case -- so the IP itself
-  # must corroborate: it is gone only if it no longer serves $path, or it
-  # serves with a different identity than the snapshot (the IP was reused
-  # by another pod, possibly another release's engine on the same port).
-  # A live engine with its own identity is a DNS flicker: skip. (A snapshot
-  # taken without identity, "ip||", cannot tell its own engine from another:
-  # once the live side reports one it fires -- as the growth branch above
-  # does for the same IP on the next clean answer.) The restart re-snapshots
-  # from DNS, so a real scale-down fires once, not in a loop.
-  local want_r want_t
-  while IFS='|' read -r ip want_r want_t; do
+  # Shrink: an argv IP missing from a non-empty Ready-only DNS answer.
+  # CoreDNS drops Terminating pods from *-ready-hl-s* while they are still
+  # alive and serving /health inside preStop, so fire immediately without
+  # waiting for serving "$ip" to fail (guarded above by non-empty $resolved
+  # and $all_resolve=1, 2x10s failureThreshold, and peer-gated stagger).
+  while IFS='|' read -r ip _; do
     [ -n "$ip" ] || continue
     printf '%s\n' "$resolved" | grep -qxF "$ip" && continue
-    if serving "$ip" "$port" "$path"; then
-      live=$(live_id "$ip") || continue  # serving, identity unknown: alive
-      [ "$live" = '|' ] && continue
-      [ "$live" = "$want_r|$want_t" ] && continue
-      echo "router stale: $role upstream $ip left DNS and its address now serves another engine ($want_r|$want_t -> $live)" >&2
-    else
-      echo "router stale: $role upstream $ip left DNS and no longer serves" >&2
-    fi
-    # One is enough to restart, and each dead address costs a full probe
-    # timeout: stop here so a large scale-down cannot run the probe past
-    # its own timeoutSeconds.
+    echo "router stale: $role upstream $ip left Ready DNS ($svc)" >&2
     rc=1
     break
   done <"$file"
@@ -1413,7 +1407,9 @@ exit $rc
        service.port, keeping the non-pd drain unchanged. */ -}}
 {{- $httpPort := .httpPort | default $root.Values.service.port -}}
 {{- $hwPort := .hwPort | default $root.Values.hangWatcher.port -}}
-import time, urllib.request, urllib.error{{ if .kill }}, os, signal{{ end }}
+{{- $pdDs := .pdDs | default false -}}
+{{- $pdRoleName := .pdRoleName | default "" -}}
+import time, urllib.request, urllib.error{{ if or .kill $pdDs }}, os{{ end }}{{ if .kill }}, signal{{ end }}{{ if $pdDs }}, json, socket{{ end }}
 
 METRICS = "http://127.0.0.1:{{ $httpPort }}/metrics"
 # What SGLang is working on right now, plus what is queued up.
@@ -1489,6 +1485,110 @@ def hung():
 
 
 deadline = time.monotonic() + {{ $preStop.drainSeconds }}
+{{- if $pdDs }}
+# Wait for all Ready PD routers in this slice to stop routing to this pod
+# before draining in-flight requests and terminating. Best-effort DELETE
+# /workers/{id} cuts wait time from ~2-3 min to ~10s; GET /workers polling
+# closes the gap if DELETE fails or a peer router is mid-preStop.
+POD_IP = os.environ.get("POD_IP", "")
+PD_SLICE = os.environ.get("PD_SLICE", "")
+FULLNAME = {{ include "sglang.fullname" $root | quote }}
+NS = {{ $root.Release.Namespace | quote }}
+PD_ROLE = {{ $pdRoleName | quote }}
+HTTP_PORT = {{ $httpPort }}
+ROUTER_PORT = {{ $root.Values.service.port }}
+ROUTER_REPLICAS = {{ int ($root.Values.pd.router.replicas | default 2) }}
+ROUTER_WAIT_CAP = min(240, {{ $preStop.drainSeconds }})
+if POD_IP and PD_SLICE:
+    ROUTER_HL = f"{FULLNAME}-router-hl-s{PD_SLICE}.{NS}.svc.cluster.local."
+    ROLE_READY_HL = f"{FULLNAME}-{PD_ROLE}-ready-hl-s{PD_SLICE}.{NS}.svc.cluster.local."
+    MY_URL = f"http://{POD_IP}:{HTTP_PORT}"
+
+    def resolve_ips(host):
+        try:
+            return sorted({ai[4][0] for ai in socket.getaddrinfo(host, None, socket.AF_INET)})
+        except Exception:
+            return []
+
+    def base_url(u):
+        return (u or "").split("@", 1)[0].rstrip("/")
+
+    def same_role(w):
+        wt = w.get("worker_type", "")
+        if isinstance(wt, dict) and wt:
+            wt = next(iter(wt.keys()))
+        return str(wt).lower() == PD_ROLE
+
+    def get_workers(rip):
+        try:
+            raw = OPEN(f"http://{rip}:{ROUTER_PORT}/workers", timeout=2).read().decode()
+            data = json.loads(raw)
+            return data if isinstance(data, list) else (data.get("workers") or [])
+        except Exception:
+            return None
+
+    def try_remove(rip, items):
+        for w in items:
+            wid = w.get("id") or w.get("worker_id")
+            if not wid:
+                continue
+            try:
+                req = urllib.request.Request(f"http://{rip}:{ROUTER_PORT}/workers/{wid}", method="DELETE")
+                OPEN(req, timeout=2).read()
+                log(f"requested DELETE /workers/{wid} on router {rip} for {MY_URL}")
+            except Exception as e:
+                log(f"best-effort DELETE /workers/{wid} on router {rip} failed: {e}")
+
+    router_deadline = min(deadline, time.monotonic() + ROUTER_WAIT_CAP)
+    removed_sent = set()
+    waited_routers = False
+    no_survivor_streak = 0
+    while time.monotonic() < router_deadline:
+        surviving = [ip for ip in resolve_ips(ROLE_READY_HL) if ip != POD_IP]
+        if not surviving:
+            no_survivor_streak += 1
+            if no_survivor_streak >= 2:
+                log(f"no surviving Ready peers in {ROLE_READY_HL}; skipping router wait")
+                break
+        else:
+            no_survivor_streak = 0
+        {{- if $askWatcher }}
+        if hung():
+            log("hang-watcher reports hung -- skipping router wait")
+            break
+        {{- end }}
+        routers = resolve_ips(ROUTER_HL)
+        if routers:
+            all_ok = True
+            still_listed = False
+            is_last_on_any = False
+            for rip in routers:
+                items = get_workers(rip)
+                if items is None:
+                    all_ok = False
+                    continue
+                mine = [w for w in items if base_url(w.get("url", "")) == MY_URL]
+                if mine:
+                    still_listed = True
+                    role_bases = {base_url(w.get("url", "")) for w in items if same_role(w) and w.get("url")}
+                    if len(role_bases) <= 1:
+                        is_last_on_any = True
+                    elif rip not in removed_sent:
+                        removed_sent.add(rip)
+                        try_remove(rip, mine)
+            if is_last_on_any:
+                log("last worker of role on router; skipping router wait")
+                break
+            if all_ok and not still_listed and len(routers) >= ROUTER_REPLICAS:
+                log(f"all {len(routers)} router(s) dropped {MY_URL}; proceeding to drain")
+                if waited_routers:
+                    time.sleep(min(2, max(0.0, deadline - time.monotonic())))
+                break
+        waited_routers = True
+        time.sleep(min({{ $poll }}, max(0.0, router_deadline - time.monotonic())))
+    else:
+        log(f"router eviction wait timed out after {ROUTER_WAIT_CAP}s; proceeding to drain")
+{{- end }}
 unreadable = 0
 while time.monotonic() < deadline:
     {{- if $askWatcher }}

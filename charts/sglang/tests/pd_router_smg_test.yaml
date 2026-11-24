@@ -181,7 +181,7 @@ tests:
           pattern: 'check "ci-prefill-hl-s0\.ci\.svc\.cluster\.local\." "30001" "/health" \|\| '
       - matchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
-          pattern: 'check "prefill" "ci-prefill-hl-s0\.ci\.svc\.cluster\.local\." prefill-ips "30001" "/health"'
+          pattern: 'check "prefill" "ci-prefill-ready-hl-s0\.ci\.svc\.cluster\.local\." prefill-ips "30001" "/health"'
       - notMatchRegex:
           path: spec.template.spec.containers[?(@.name == "router")].livenessProbe.exec.command[2]
           pattern: '127\.0\.0\.1'
@@ -316,3 +316,120 @@ tests:
       - equal:
           path: spec.minAvailable
           value: 1
+
+  - it: pd-ds renders Ready-only headless Services for prefill and decode
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-prefill-ready-hl-s0
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.clusterIP
+          value: None
+      - equal:
+          path: spec.publishNotReadyAddresses
+          value: false
+      - equal:
+          path: spec.selector["disaggregatedset.x-k8s.io/role"]
+          value: prefill
+
+  - it: pd-ds renders Ready-only headless Service for decode
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-decode-ready-hl-s0
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.clusterIP
+          value: None
+      - equal:
+          path: spec.publishNotReadyAddresses
+          value: false
+      - equal:
+          path: spec.selector["disaggregatedset.x-k8s.io/role"]
+          value: decode
+
+  - it: pd-ds router prefers Ready-only DNS at boot and passes crash-resilience flags to smg
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'ci-prefill-ready-hl-s0\.ci\.svc\.cluster\.local\.'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: 'ci-decode-ready-hl-s0\.ci\.svc\.cluster\.local\.'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--disable-circuit-breaker'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--health-check-interval-secs 2'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--health-failure-threshold 2'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--health-check-timeout-secs 2'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--disable-worker-overload-protection'
+
+  - it: colocate router passes crash-resilience flags to smg without DS preStop router wait on engines
+    template: templates/pd-colocate.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      pd.colocate: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--disable-circuit-breaker'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--health-check-interval-secs 2'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "router")].args[0]
+          pattern: '--disable-worker-overload-protection'
+      - notMatchRegex:
+          path: spec.template.spec.containers[?(@.name == "sglang")].lifecycle.preStop.exec.command[2]
+          pattern: 'router-hl-s'
+
+  - it: pd-ds prefill and decode leaders carry downward-API coords and router-eviction preStop
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    asserts:
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "sglang")].env
+          content:
+            name: POD_IP
+            valueFrom:
+              fieldRef:
+                fieldPath: status.podIP
+      - contains:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "sglang")].env
+          content:
+            name: PD_SLICE
+            valueFrom:
+              fieldRef:
+                fieldPath: "metadata.labels['disaggregatedset.x-k8s.io/slice']"
+      - matchRegex:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "sglang")].lifecycle.preStop.exec.command[2]
+          pattern: 'router-hl-s'
+      - matchRegex:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "sglang")].lifecycle.preStop.exec.command[2]
+          pattern: 'DELETE'
+      - matchRegex:
+          path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "sglang")].lifecycle.preStop.exec.command[2]
+          pattern: 'ready-hl-s'
+      - isNull:
+          path: spec.roles[0].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "sglang")].lifecycle

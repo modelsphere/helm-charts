@@ -106,6 +106,9 @@ jobs:
           "$RUNNER_TEMP/venv/bin/pip" install --quiet pyyaml==6.0.2
           PATH="$RUNNER_TEMP/venv/bin:$PATH" hack/test-pd-router-probe.sh charts/sglang charts/vllm
 
+      - name: pd engine preStop behaviour
+        run: python3 hack/test-pd-prestop.py
+
   # A chart whose templates, defaults, schema or subcharts change must raise its
   # version: release.yml skips a version that is already released and still
   # succeeds, so an unbumped change would never be published.
