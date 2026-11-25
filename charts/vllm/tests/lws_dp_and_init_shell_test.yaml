@@ -1,0 +1,392 @@
+# Multi-node Data Parallel mode (lws.mode=dp) and extraInitShell across shapes.
+suite: lws dp mode and extraInitShell
+release:
+  name: ci
+set:
+  modelRoute.nginx.outputConfigMap: ci/openresty-conf
+tests:
+  - it: default lws.mode=mp keeps mp executor flags on leader and worker
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--distributed-executor-backend=mp'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--nnodes=2'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: '"--node-rank=0"'
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: '"\-\-master-addr=\$\{LWS_LEADER_ADDRESS\}"'
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--master-port=29500'"
+      - notMatchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "--headless|--data-parallel-"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: '"--node-rank=\$\{LWS_WORKER_INDEX\}"'
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--headless'"
+
+  - it: lws.mode=dp emits data-parallel flags, leader DNS resolution, and matches wait-leader distPort
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: dp
+      lws.distPort: 13399
+      lws.dataParallel:
+        sizeLocal: 1
+        apiServerCount: 1
+        resolveLeaderAddress: true
+      extraArgs:
+        - "--tensor-parallel-size=8"
+        - "--enable-expert-parallel"
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: 'DP_LEADER_ADDR=\$\(python3'
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-size=2'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-size-local=1'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-rpc-port=13399'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: '"--data-parallel-address=\$\{DP_LEADER_ADDR\}"'
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--api-server-count=1'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--tensor-parallel-size=8'"
+      - notMatchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "--distributed-executor-backend|--nnodes|--node-rank|--master-addr|--master-port|--headless|--data-parallel-start-rank"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--headless'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: '"--data-parallel-start-rank=\$\(\(\$\{LWS_WORKER_INDEX:\?\} \* 1\)\)"'
+      - notMatchRegex:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "--api-server-count|--distributed-executor-backend|--nnodes|--master-addr"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.initContainers[?(@.name == "wait-leader")].args[0]
+          pattern: "port=13399"
+
+  - it: lws.mode=dp supports multi-rank pods, omitting apiServerCount, and resolveLeaderAddress=false
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 3
+      lws.mode: dp
+      lws.dataParallel:
+        sizeLocal: 4
+        apiServerCount: 0
+        resolveLeaderAddress: false
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-size=12'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-size-local=4'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: '"--data-parallel-address=\$\{LWS_LEADER_ADDRESS\}"'
+      - notMatchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "DP_LEADER_ADDR|--api-server-count"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: '"--data-parallel-start-rank=\$\(\(\$\{LWS_WORKER_INDEX:\?\} \* 4\)\)"'
+
+  - it: lws.mode=dp composes with cache.enabled and extraInitShell
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: dp
+      cache.enabled: true
+      extraInitShell: |
+        if [ -f /usr/lib/aarch64-linux-gnu/libjemalloc.so.2 ]; then
+          export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2
+        fi
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: 'export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc\.so\.2'
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: 'exec python3 /opt/vllm-cache/cache_manager\.py -- \\\n\s+vllm serve'
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: 'exec python3 /opt/vllm-cache/cache_manager\.py -- \\\n\s+vllm serve'
+
+  - it: lws.mode=dp rejects conflicting DP flags in extraArgs
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: dp
+      extraArgs:
+        - "--data-parallel-size=2"
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraArgs carries \"--data-parallel-size=2\""
+
+  - it: lws.mode=dp rejects --api-server-count in extraArgs when chart emits it
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: dp
+      extraArgs:
+        - "--api-server-count=2"
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraArgs carries \"--api-server-count=2\""
+
+  - it: lws.mode=dp emits --api-server-count=1 by default when dataParallel is not overridden
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: dp
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--api-server-count=1'"
+
+  - it: lws.mode=dp omits --api-server-count when apiServerCount is null
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: dp
+      lws.dataParallel:
+        apiServerCount: null
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-size=2'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-size-local=1'"
+      - notMatchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "--api-server-count"
+
+  - it: lws.mode=dp allows --api-server-count in extraArgs when apiServerCount is 0
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: dp
+      lws.dataParallel:
+        apiServerCount: 0
+      extraArgs:
+        - "--api-server-count=2"
+        - "--data-parallel-hybrid-lb"
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--api-server-count=2'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-hybrid-lb'"
+
+  - it: lws.mode=dp allows --api-server-count in extraArgs when apiServerCount is null
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: dp
+      lws.dataParallel:
+        apiServerCount: null
+      extraArgs:
+        - "--api-server-count=2"
+        - "--data-parallel-hybrid-lb"
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--api-server-count=2'"
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-hybrid-lb'"
+
+  - it: lws.mode=mp still allows --data-parallel-size in extraArgs
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.size: 2
+      lws.mode: mp
+      extraArgs:
+        - "--data-parallel-size=4"
+    asserts:
+      - matchRegex:
+          path: spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-size=4'"
+
+  - it: pd multi-node role in dp mode emits DP flags while size-1 role may set local DP flags
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    set:
+      scaler.enabled: false
+      pd.enabled: true
+      rdma.enabled: true
+      lws.mode: dp
+      pd.prefill.gpus: 8
+      pd.prefill.size: 1
+      pd.prefill.extraArgs:
+        - "--data-parallel-size=4"
+      pd.decode.gpus: 8
+      pd.decode.size: 2
+      pd.decode.distPort: 13399
+    asserts:
+      - notMatchRegex:
+          path: spec.roles[?(@.name == "prefill")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "--data-parallel-rpc-port|--data-parallel-address"
+      - matchRegex:
+          path: spec.roles[?(@.name == "prefill")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-size=4'"
+      - matchRegex:
+          path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-size=2'"
+      - matchRegex:
+          path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--data-parallel-rpc-port=13399'"
+      - matchRegex:
+          path: spec.roles[?(@.name == "decode")].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--headless'"
+
+  - it: pd multi-node role in dp mode rejects conflicting DP flags
+    template: templates/pd-guards.yaml
+    set:
+      scaler.enabled: false
+      pd.enabled: true
+      rdma.enabled: true
+      lws.mode: dp
+      pd.prefill.gpus: 8
+      pd.decode.gpus: 8
+      pd.decode.size: 2
+      pd.decode.extraArgs:
+        - "--data-parallel-address=1.2.3.4"
+    asserts:
+      - failedTemplate:
+          errorPattern: "pd.decode.extraArgs carries \"--data-parallel-address=1.2.3.4\""
+
+  - it: pd size-1 role in dp mode passes pd-guards with local DP flags
+    template: templates/pd-guards.yaml
+    set:
+      scaler.enabled: false
+      pd.enabled: true
+      rdma.enabled: true
+      lws.mode: dp
+      pd.prefill.gpus: 8
+      pd.prefill.size: 1
+      pd.prefill.extraArgs:
+        - "--data-parallel-size=4"
+      pd.decode.gpus: 8
+      pd.decode.size: 1
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: single-node keeps exec form when extraInitShell is whitespace only
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      extraInitShell: "   \n  "
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "vllm")].command
+          value: ["vllm", "serve"]
+
+  - it: single-node wraps in bash -lc when extraInitShell is non-empty
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      cache.enabled: true
+      extraInitShell: |
+        export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc.so.2
+      extraArgs:
+        - "--tensor-parallel-size=2"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "vllm")].command
+          value: ["bash", "-lc"]
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "ulimit -l unlimited"
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libjemalloc\\.so\\.2"
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: 'exec python3 /opt/vllm-cache/cache_manager\.py -- \\\n\s+vllm serve'
+      - matchRegex:
+          path: spec.template.spec.containers[?(@.name == "vllm")].args[0]
+          pattern: "'--tensor-parallel-size=2'"
+
+  - it: rejects commandOverride combined with non-empty extraInitShell
+    template: templates/deployment.yaml
+    set:
+      commandOverride: ["sleep", "inf"]
+      extraInitShell: "export FOO=1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "extraInitShell is set, but commandOverride replaces"
+
+  - it: allows commandOverride when extraInitShell is whitespace only
+    template: templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      commandOverride: ["sleep", "inf"]
+      extraInitShell: "   "
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "vllm")].command
+          value: ["sleep", "inf"]
+
+  - it: schema rejects invalid lws.mode and dataParallel values
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.mode: ray
+    asserts:
+      - failedTemplate:
+          errorPattern: "mode"
+
+  - it: schema rejects sizeLocal below 1
+    template: templates/lws.yaml
+    set:
+      lws.enabled: true
+      lws.mode: dp
+      lws.dataParallel:
+        sizeLocal: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "sizeLocal"

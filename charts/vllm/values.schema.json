@@ -50,7 +50,7 @@
         "size": { "type": "integer", "minimum": 1 },
         "httpPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "distPort": {
-          "description": "Quoted in values.yaml; empty means inherit lws.distPort. A/B + size >= 2 only: the rendezvous port for --master-port inside this role's group. Colocate and size-1 roles never render --master-addr/--master-port, so it is a no-op there.",
+          "description": "Quoted in values.yaml; empty means inherit lws.distPort. A/B + size >= 2 only: the rendezvous port (--master-port in mp mode, --data-parallel-rpc-port in dp mode) inside this role's group. Colocate and size-1 roles never render multi-node rendezvous flags, so it is a no-op there.",
           "type": ["string", "integer"]
         },
         "gpus": {
@@ -135,7 +135,38 @@
         "enabled": { "type": "boolean" },
         "size": { "type": "integer", "minimum": 1 },
         "replicas": { "type": "integer", "minimum": 0 },
-        "distPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "distPort": {
+          "description": "Rendezvous port inside the group (--master-port in mp mode, --data-parallel-rpc-port in dp mode) and what waitForLeader probes.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "mode": {
+          "description": "Multi-node coordination mode: mp (default --distributed-executor-backend=mp with --nnodes/--master-addr) or dp (headless data-parallel coordination with --data-parallel-* flags).",
+          "type": "string",
+          "enum": ["mp", "dp"]
+        },
+        "dataParallel": {
+          "description": "Parameters used when lws.mode=dp.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sizeLocal": {
+              "description": "Data-parallel ranks hosted per pod (--data-parallel-size-local). Total --data-parallel-size is group size x sizeLocal.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "apiServerCount": {
+              "description": "Emitted as --api-server-count on the group leader when > 0. 0 or null omits the flag.",
+              "type": ["integer", "null"],
+              "minimum": 0
+            },
+            "resolveLeaderAddress": {
+              "description": "Resolve LWS_LEADER_ADDRESS DNS to an IP in the container shell before passing --data-parallel-address.",
+              "type": "boolean"
+            }
+          }
+        },
         "startupPolicy": { "type": "string", "enum": ["LeaderCreated", "LeaderReady"] },
         "restartPolicy": { "type": "string", "enum": ["Default", "RecreateGroupOnPodRestart"] },
         "subdomainPolicy": { "type": "string", "enum": ["Shared", "UniquePerReplica"] },
@@ -378,7 +409,7 @@
     },
 
     "extraInitShell": {
-      "description": "Bash block spliced into the multi-node pod's command between `ulimit` and `exec vllm serve`. Anything exported here is visible when the chart's ${LWS_LEADER_ADDRESS}/${LWS_WORKER_INDEX} flags expand. No-op on single-pod exec form.",
+      "description": "Bash block spliced into the pod's command between `ulimit` and `exec vllm serve`. Wraps single-node pods in bash -lc when non-empty. Anything exported here is visible when ${LWS_LEADER_ADDRESS}, ${LWS_WORKER_INDEX}, and ${DP_LEADER_ADDR} expand. Rejected under commandOverride.",
       "type": "string"
     },
 

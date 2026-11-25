@@ -20,9 +20,10 @@
 
     - the engine command form. Every role runs `vllm serve` (the image's own
       entrypoint, and the only CLI that handles --headless). `single` keeps the
-      exec form (no shell). Multi-node pods need a shell, for two reasons
-      that both matter:
-        * --node-rank has to come from ${LWS_WORKER_INDEX} at runtime.
+      exec form (no shell) unless extraInitShell is non-empty. Multi-node pods
+      always use a shell, for two reasons that both matter:
+        * --node-rank / --data-parallel-start-rank / --data-parallel-address
+          have to expand from the pod's LWS environment at runtime.
         * the rdma-injector webhook only prepends its
           `source /etc/gpu-node/nccl-ib.env` (the per-node NCCL_IB_HCA pipeline)
           to containers started as bash/sh -c. An exec-form container gets the
@@ -30,9 +31,12 @@
           the wrong HCA rather than failing.
       Neither form is built under commandOverride, which also frees
       model.localPath and model.gpus to be empty (see values.yaml).
-    - --nnodes / --node-rank / --master-addr / --master-port /
-      --distributed-executor-backend, added only for lws roles (and pd roles
-      whose own size >= 2), plus --headless on workers.
+    - multi-node coordination flags for lws roles (and pd roles whose own
+      size >= 2): mp mode emits --nnodes / --node-rank / --master-addr /
+      --master-port / --distributed-executor-backend; dp mode emits
+      --data-parallel-size / --data-parallel-size-local /
+      --data-parallel-rpc-port / --data-parallel-address / --api-server-count
+      (leader) / --data-parallel-start-rank (worker), plus --headless on workers.
     - probes, the hang-watcher sidecar and the container port: `serves` roles
       only. There is nothing listening on a worker to probe.
     - preStop: see vllm.preStopScript.
@@ -114,8 +118,12 @@
 {{- $cacheFullHostPath := ternary (printf "%s/%s" $cacheBaseHostPath $cacheSuffix) $cacheBaseHostPath (ne (toString $cacheSuffix) "") }}
 {{- /* Empty means no model volume: no hostPath, no mount. */}}
 {{- $hasModel := ne (toString ($root.Values.model.localPath | default "")) "" }}
+{{- $hasInitShell := ne (trim ($root.Values.extraInitShell | default "")) "" }}
 {{- if and $override $root.Values.extraArgs }}
 {{- fail (printf "vllm: extraArgs is set (%v) but commandOverride replaces the command line the chart would append it to, so these flags would reach nothing. Fold them into commandOverride, or drop it" $root.Values.extraArgs) }}
+{{- end }}
+{{- if and $override $hasInitShell }}
+{{- fail "vllm: extraInitShell is set, but commandOverride replaces the chart's command wrapper so extraInitShell would never run. Fold the setup into commandOverride, or drop commandOverride" }}
 {{- end }}
 {{- if and (not $override) (not $hasModel) }}
 {{- fail "vllm: model.localPath is empty while the chart is still building vLLM's command line, and vLLM cannot start without --model. Set commandOverride to run a non-vLLM image, or point model.localPath at the weights" }}
@@ -208,8 +216,40 @@
        every non-pd multi-node role, and pd roles whose own size >= 2. At a
        pd roleSize of 1 there is exactly one pod, so the flags would only
        restate what the engine already knows. */}}
+{{- $lwsMode := $lws.mode | default "mp" }}
+{{- $dp := $lws.dataParallel | default dict }}
+{{- $dpSizeLocal := int ($dp.sizeLocal | default 1) }}
+{{- $dpApiServerCount := int (include "vllm.dpApiServerCount" $root) }}
+{{- $dpResolveLeader := true }}
+{{- if and (hasKey $dp "resolveLeaderAddress") (not (kindIs "invalid" $dp.resolveLeaderAddress)) }}
+{{- $dpResolveLeader = $dp.resolveLeaderAddress }}
+{{- end }}
 {{- $trio := and $multi (or (not $pdRole) (gt (int ($roleCfg.size | default 1)) 1)) }}
 {{- if $trio }}
+{{- $groupSize := int (ternary ($roleCfg.size | default 1) $lws.size $pdRole) }}
+{{- $distPort := ternary ($roleCfg.distPort | default $lws.distPort) $lws.distPort $pdRole }}
+{{- if eq $lwsMode "dp" }}
+{{- /*
+  External/headless data-parallel coordination across the group: each pod runs
+  sizeLocal DP ranks (and intra-node TP/EP via extraArgs). When
+  resolveLeaderAddress is true, the pod shell resolves ${LWS_LEADER_ADDRESS}
+  to an IP (${DP_LEADER_ADDR}) before exec so Ascend/vLLM DP receives a raw IP.
+  Workers carry --headless and start at rank LWS_WORKER_INDEX * sizeLocal.
+*/}}
+{{- $flags = append $flags (printf "--data-parallel-size=%d" (mul $groupSize $dpSizeLocal)) }}
+{{- $flags = append $flags (printf "--data-parallel-size-local=%d" $dpSizeLocal) }}
+{{- $flags = append $flags (printf "--data-parallel-rpc-port=%v" $distPort) }}
+{{- $dpAddr := ternary "${DP_LEADER_ADDR}" "${LWS_LEADER_ADDRESS}" $dpResolveLeader }}
+{{- $flags = append $flags (printf "--data-parallel-address=%s" $dpAddr) }}
+{{- $expand = append $expand (last $flags) }}
+{{- if $worker }}
+{{- $flags = append $flags "--headless" }}
+{{- $flags = append $flags (printf "--data-parallel-start-rank=$((${LWS_WORKER_INDEX:?} * %d))" $dpSizeLocal) }}
+{{- $expand = append $expand (last $flags) }}
+{{- else if gt $dpApiServerCount 0 }}
+{{- $flags = append $flags (printf "--api-server-count=%d" $dpApiServerCount) }}
+{{- end }}
+{{- else }}
 {{- /*
   The flags that make one vLLM instance span the group. They are derived, not
   configured: nnodes IS the group size (lws.size, or a pd role's own size;
@@ -229,14 +269,15 @@
   Ray on its own when the world size exceeds the node's GPUs.
 */}}
 {{- $flags = append $flags "--distributed-executor-backend=mp" }}
-{{- $flags = append $flags (printf "--nnodes=%v" (ternary $roleCfg.size $lws.size $pdRole)) }}
+{{- $flags = append $flags (printf "--nnodes=%v" $groupSize) }}
 {{- $flags = append $flags (printf "--node-rank=%s" (ternary "${LWS_WORKER_INDEX}" "0" $worker)) }}
 {{- $expand = append $expand (last $flags) }}
 {{- $flags = append $flags "--master-addr=${LWS_LEADER_ADDRESS}" }}
 {{- $expand = append $expand (last $flags) }}
-{{- $flags = append $flags (printf "--master-port=%v" (ternary ($roleCfg.distPort | default $lws.distPort) $lws.distPort $pdRole)) }}
+{{- $flags = append $flags (printf "--master-port=%v" $distPort) }}
 {{- if $worker }}
 {{- $flags = append $flags "--headless" }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- /* --kv-transfer-config is emitted when EITHER the engine is a pd role
@@ -344,6 +385,10 @@
       "nixlHttpPort" $nixlHttpPort
       "hasModel" $hasModel
       "override" $override
+      "hasInitShell" $hasInitShell
+      "trio" $trio
+      "lwsMode" $lwsMode
+      "dpResolveLeader" $dpResolveLeader
       "expand" $expand
       "l2" $l2
       "flags" $flags
@@ -386,6 +431,10 @@
 {{- $nixlHttpPort := $e.nixlHttpPort }}
 {{- $hasModel := $e.hasModel }}
 {{- $override := $e.override }}
+{{- $hasInitShell := $e.hasInitShell }}
+{{- $trio := $e.trio }}
+{{- $lwsMode := $e.lwsMode }}
+{{- $dpResolveLeader := $e.dpResolveLeader }}
 {{- $expand := $e.expand }}
 {{- $flags := $e.flags }}
 {{- $preStop := $root.Values.lifecycle.preStop }}
@@ -421,7 +470,7 @@
     - {{ toString . | quote }}
     {{- end }}
   {{- end }}
-  {{- else if or $multi $pdRole }}
+  {{- else if or $multi $pdRole $hasInitShell }}
   # Shell form on purpose -- see the header of this file. `exec` keeps vLLM as
   # PID 1, which SIGTERM handling and the leader preStop below both depend on.
   #
@@ -431,12 +480,13 @@
   # raise it and that is not a reason to refuse to start.
   #
   # Every flag reaches the engine exactly as written. The ones the chart
-  # derives from the LWS environment (the rank and the leader's address) are
-  # double-quoted so bash expands their ${...}; everything else -- extraArgs
-  # included -- is single-quoted with any ' inside escaped, so spaces, quotes,
-  # $ and JSON survive the trip through bash untouched, the same as in the
-  # single-pod exec form. To reference the container's env from extraArgs,
-  # use Kubernetes' $(VAR) syntax: the kubelet expands it in either form.
+  # derives from the LWS environment (the rank, leader address, DP start rank)
+  # are double-quoted so bash expands their ${...} / $((...)); everything else
+  # -- extraArgs included -- is single-quoted with any ' inside escaped, so
+  # spaces, quotes, $ and JSON survive the trip through bash untouched, the
+  # same as in the single-pod exec form. To reference the container's env from
+  # extraArgs, use Kubernetes' $(VAR) syntax: the kubelet expands it in either
+  # form.
   #
   # extraInitShell runs in the same shell between `ulimit` and `exec`. It is
   # the only place a pod can run arbitrary bash before vLLM takes over -- the
@@ -444,14 +494,28 @@
   # example (finding the NIC that owns the pod's 172.28.x.x IP would otherwise
   # require commandOverride, which forfeits every chart-derived flag). The
   # block is inserted verbatim, so anything exported here -- including
-  # overridden ${LWS_LEADER_ADDRESS} -- is visible when the flags below are
-  # expanded.
+  # overridden ${LWS_LEADER_ADDRESS} or ${DP_LEADER_ADDR} -- is visible when
+  # the flags below are expanded.
   command: ["bash", "-lc"]
   args:
     - |
       ulimit -l unlimited 2>/dev/null || true
-  {{- with $root.Values.extraInitShell }}
-      {{ . | nindent 6 | trim }}
+  {{- if $hasInitShell }}
+      {{ $root.Values.extraInitShell | trim | nindent 6 | trim }}
+  {{- end }}
+  {{- if and $trio (eq $lwsMode "dp") $dpResolveLeader }}
+      if [ -z "${DP_LEADER_ADDR:-}" ]; then
+        for _ in $(seq 1 60); do
+          if DP_LEADER_ADDR=$(python3 -c 'import socket,sys; print(socket.gethostbyname(sys.argv[1]))' "${LWS_LEADER_ADDRESS:?}" 2>/dev/null) && [ -n "$DP_LEADER_ADDR" ]; then
+            break
+          fi
+          sleep 5
+        done
+        if [ -z "${DP_LEADER_ADDR:-}" ]; then
+          echo "vllm: timed out resolving LWS_LEADER_ADDRESS=${LWS_LEADER_ADDRESS}" >&2
+          exit 1
+        fi
+      fi
   {{- end }}
       {{- if $cacheEnabled }}
       exec python3 /opt/vllm-cache/cache_manager.py -- \

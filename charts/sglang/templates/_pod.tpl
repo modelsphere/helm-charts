@@ -18,7 +18,8 @@
   What the role actually decides:
 
     - the engine command form. `single` keeps the exec form
-      (sglang serve, no shell). Multi-node pods need a shell,
+      (sglang serve, no shell) unless extraInitShell is non-empty. Multi-node
+      pods always use a shell,
       for two reasons that both matter: --node-rank has to come from
       ${LWS_WORKER_INDEX} at runtime, and the rdma-injector webhook only prepends
       its `source /etc/gpu-node/nccl-ib.env` (the per-node NCCL_IB_HCA pipeline)
@@ -97,8 +98,12 @@
 {{- $cacheFullHostPath := ternary (printf "%s/%s" $cacheBaseHostPath $cacheSuffix) $cacheBaseHostPath (ne (toString $cacheSuffix) "") }}
 {{- /* Empty means no model volume: no hostPath, no mount. */}}
 {{- $hasModel := ne (toString ($root.Values.model.localPath | default "")) "" }}
+{{- $hasInitShell := ne (trim ($root.Values.extraInitShell | default "")) "" }}
 {{- if and $override $root.Values.extraArgs }}
 {{- fail (printf "sglang: extraArgs is set (%v) but commandOverride replaces the command line the chart would append it to, so these flags would reach nothing. Fold them into commandOverride, or drop it" $root.Values.extraArgs) }}
+{{- end }}
+{{- if and $override $hasInitShell }}
+{{- fail "sglang: extraInitShell is set, but commandOverride replaces the chart's command wrapper so extraInitShell would never run. Fold the setup into commandOverride, or drop commandOverride" }}
 {{- end }}
 {{- if and (not $override) (not $hasModel) }}
 {{- fail "sglang: model.localPath is empty while the chart is still building SGLang's command line, and SGLang cannot start without --model-path. Set commandOverride to run a non-SGLang image, or point model.localPath at the weights" }}
@@ -331,6 +336,7 @@
       "httpPort" $httpPort
       "hasModel" $hasModel
       "override" $override
+      "hasInitShell" $hasInitShell
       "expand" $expand
       "flags" $flags
       "cacheEnabled" $cacheEnabled
@@ -366,6 +372,7 @@
 {{- $httpPort := $e.httpPort }}
 {{- $hasModel := $e.hasModel }}
 {{- $override := $e.override }}
+{{- $hasInitShell := $e.hasInitShell }}
 {{- $expand := $e.expand }}
 {{- $flags := $e.flags }}
 {{- $preStop := $root.Values.lifecycle.preStop }}
@@ -395,7 +402,7 @@
     - {{ toString . | quote }}
     {{- end }}
   {{- end }}
-  {{- else if or $multi $pdRole }}
+  {{- else if or $multi $pdRole $hasInitShell }}
   # Shell form on purpose -- see the header of this file. `exec` keeps SGLang as
   # PID 1, which SIGTERM handling and the leader preStop below both depend on.
   #
@@ -411,10 +418,17 @@
   # $ and JSON survive the trip through bash untouched, the same as in the
   # single-pod exec form. To reference the container's env from extraArgs, use
   # Kubernetes' $(VAR) syntax: the kubelet expands it in either form.
+  #
+  # extraInitShell runs in the same shell between `ulimit` and `exec`. Anything
+  # exported here -- including overridden ${LWS_LEADER_ADDRESS} or ${NCCL_IB_HCA}
+  # -- is visible when the flags below expand.
   command: ["bash", "-lc"]
   args:
     - |
       ulimit -l unlimited 2>/dev/null || true
+  {{- if $hasInitShell }}
+      {{ $root.Values.extraInitShell | trim | nindent 6 | trim }}
+  {{- end }}
       {{- if $pdRole }}
       # The rdma-injector prepends `source /etc/gpu-node/nccl-ib.env`, so
       # NCCL_IB_HCA is already the healthy IB set on THIS node. Mooncake wants

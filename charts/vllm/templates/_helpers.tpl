@@ -309,3 +309,44 @@
 {{- $img := .Values.pd.router.waitUpstreamsImage | default dict -}}
 {{ $img.repository | default "debian" }}:{{ $img.tag | default "12-slim" }}
 {{- end -}}
+
+{{/*
+  Effective --api-server-count for lws.mode=dp. values.yaml defaults it to 1;
+  Helm's null-deletes-key merge removes the key from lws.dataParallel when a
+  user overrides apiServerCount to null, so a missing or nil value resolves to
+  0 (omit the flag), matching explicit 0. Takes the root context.
+*/}}
+{{- define "vllm.dpApiServerCount" -}}
+{{- $dp := .Values.lws.dataParallel | default dict -}}
+{{- if and (hasKey $dp "apiServerCount") (not (kindIs "invalid" $dp.apiServerCount)) -}}
+  {{- int $dp.apiServerCount -}}
+{{- else -}}
+  {{- 0 -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+  Reject extraArgs entries that restate flags the chart derives for a
+  multi-node group (vLLM takes the last occurrence of a repeated flag).
+  Takes dict "root" $ "args" <list> "label" <string>.
+*/}}
+{{- define "vllm.checkDerivedExtraArgs" -}}
+{{- $lws := .root.Values.lws -}}
+{{- $mode := $lws.mode | default "mp" -}}
+{{- $derived := list "--nnodes" "--node-rank" "--master-addr" "--master-port" "--headless" "--distributed-executor-backend" -}}
+{{- if eq $mode "dp" -}}
+  {{- $derived = list "--data-parallel-size" "--data-parallel-size-local" "--data-parallel-address" "--data-parallel-rpc-port" "--data-parallel-start-rank" "--headless" -}}
+  {{- if gt (int (include "vllm.dpApiServerCount" .root)) 0 -}}
+    {{- $derived = append $derived "--api-server-count" -}}
+  {{- end -}}
+{{- end -}}
+{{- $label := .label -}}
+{{- range $arg := (.args | default list) -}}
+  {{- $a := toString $arg -}}
+  {{- range $flag := $derived -}}
+    {{- if or (eq $a $flag) (hasPrefix (printf "%s=" $flag) $a) (hasPrefix (printf "%s " $flag) $a) -}}
+      {{- fail (printf "vllm: %s carries %q, which multi-node (%s mode) already derives per pod. vLLM takes the LAST occurrence of a repeated flag, so this would override the per-pod value. Drop it." $label $arg $mode) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
