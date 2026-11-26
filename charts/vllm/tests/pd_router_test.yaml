@@ -422,6 +422,9 @@ tests:
           path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
           pattern: '/remove_worker'
       - matchRegex:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
+          pattern: 'ROUTER_WAIT_CAP = min\(440, 600\)'
+      - matchRegex:
           path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
           pattern: '\{PD_ROLE\}-hl-s'
       - isNull:
@@ -469,3 +472,27 @@ tests:
       - equal:
           path: spec.template.spec.containers[?(@.name == "router")].lifecycle.preStop.exec.command[2]
           value: "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep 45"
+
+  - it: pd-ds preStop keeps 240s ROUTER_WAIT_CAP floor when pd.router.preStop.endpointSyncSeconds is 0
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    set:
+      pd.router.preStop.endpointSyncSeconds: 0
+    asserts:
+      - matchRegex:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
+          pattern: 'ROUTER_WAIT_CAP = min\(240, 600\)'
+
+  - it: pd-ds preStop scales ROUTER_WAIT_CAP when pd.router.preStop.endpointSyncSeconds is 200
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    set:
+      pd.router.preStop.endpointSyncSeconds: 200
+    asserts:
+      - matchRegex:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
+          pattern: 'ROUTER_WAIT_CAP = min\(600, 600\)'
