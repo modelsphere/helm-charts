@@ -7,9 +7,11 @@ sources:
   - https://github.com/modelsphere/llm-openresty
 type: application
 # The chart version is independent of appVersion; bump it on every change.
-version: 0.3.7
+version: 0.3.8
 # The exporter image tag: values.image.tag is empty by default and falls back to
 # this, so a release moves both together. It names an exporter/v* release of
 # modelsphere/llm-openresty, published as 4pdosc/bodylog-exporter:<appVersion>.
-appVersion: "0.2.14"
+# 0.2.15 adds the req_model label to bodylog_requests_total (bounded: the first
+# BODYLOG_REQ_MODEL_MAX_VALUES distinct names, default 128, then "other").
+appVersion: "0.2.15"
 keywords: [bodylog, exporter, prometheus, observability]
