@@ -55,11 +55,19 @@ for c in "${charts[@]}"; do
   # shellcheck disable=SC2046
   render=$(helm template ci "charts/$c" $(extra_values "$c")) \
     || { echo "FAIL $c: does not render with its defaults"; missing=$((missing+1)); continue; }
-  # Container images, plus the wasm plugins a Higress WasmPlugin pulls (`url: oci://...`):
-  # the gateway fetches those itself, and a missing one stalls every plugin update on it.
-  images=$(printf '%s\n' "$render" | sed -nE \
-    -e 's/^[[:space:]-]*image:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' \
-    -e 's#^[[:space:]-]*url:[[:space:]]*"?oci://([^"[:space:]]+)"?.*#\1#p' | sort -u)
+  # Container images, plus the wasm plugins a Higress WasmPlugin pulls: the gateway
+  # fetches those itself, and a missing one stalls every plugin update on it. Only
+  # oci:// plugin URLs can be resolved here; any other scheme fails the chart.
+  # spec.url of each WasmPlugin (top-level kind, url two spaces in under spec).
+  wasm=$(printf '%s\n' "$render" | awk '/^---/{w=0} /^kind:[[:space:]]*WasmPlugin[[:space:]]*$/{w=1}
+    w && /^  url:/{u=$2; gsub(/"/,"",u); print u}' | sort -u)
+  other=$(printf '%s\n' "$wasm" | grep -v -e '^oci://' -e '^$' || true)
+  if [ -n "$other" ]; then
+    echo "FAIL $c: WasmPlugin url(s) this check cannot resolve, use oci://: $(echo $other)"
+    missing=$((missing+1))
+  fi
+  images=$( { printf '%s\n' "$render" | sed -nE 's/^[[:space:]-]*image:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p'
+              printf '%s\n' "$wasm" | sed -n 's#^oci://##p'; } | sort -u)
   if [ -z "$images" ]; then echo "FAIL $c: renders no image at all -- the check would be meaningless"; missing=$((missing+1)); continue; fi
   echo "== $c $(version_of < "charts/$c/Chart.yaml")"
   for img in $images; do
