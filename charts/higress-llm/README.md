@@ -56,7 +56,14 @@ a terminal chunk with `finish_reason: content_filter` and `[DONE]`, and no usage
 chunk. `/v1/messages` clients get `stop_reason: "content_filter"` and a
 `message_delta` without `usage`, which the Anthropic TypeScript SDK's `MessageStream`
 reports as an error. A cut happens after the first byte, so it is never spilled to
-another tier. The plugin is `FAIL_OPEN`: if it cannot load, streams pass uncut. See
+another tier. The plugin is `FAIL_OPEN`: if it cannot load, streams pass uncut.
+
+**A cut stream is not billed.** The usage chunk never arrives (the gateway stops reading
+the upstream at the cut), so `ai-statistics` records no tokens and the `ai_log` of the
+request has no `input_token`/`output_token`. An OpenResty bodylog behind the gateway has
+no tokens either, and no `finish_reason`. The way to find cuts is `ai_log`'s
+`stream_guard_action: cut` (with `stream_guard_tail_chunks` and friends) or the
+gateway's `ai-stream-guard: cut stream` warn line; the bodylog has no marker. See
 the plugin's [README](https://github.com/modelsphere/higress/tree/main/plugins/wasm-go/extensions/ai-stream-guard)
 for the detectors and the `ai_log` attributes.
 
