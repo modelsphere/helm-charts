@@ -103,6 +103,25 @@ entries:
     version: 0.3.47
   bodylog:
   - apiVersion: v2
+    appVersion: 0.1.19
+    created: "2026-11-26T08:14:41.684867222Z"
+    description: 'Body-log listener for the OpenResty router: receives full request/response
+      frames over TCP, writes them as hourly JSONL, and serves rollups over HTTP'
+    digest: 054f9d01e4af0207591a24527bea17185f93a67e69ee4b9289164466bb672042
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - openresty
+    - observability
+    name: bodylog
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/bodylog-0.1.19/bodylog-0.1.19.tgz
+    version: 0.1.19
+  - apiVersion: v2
     appVersion: 0.1.18
     created: "2026-11-26T05:58:57.726028891Z"
     description: 'Body-log listener for the OpenResty router: receives full request/response
@@ -3676,4 +3695,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-11-26T05:58:57.874866245Z"
+generated: "2026-11-26T08:14:41.685103982Z"
