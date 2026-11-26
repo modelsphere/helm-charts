@@ -1,7 +1,7 @@
 higress-llm {{ .Chart.Version }}: the gateway-wide plugins in {{ .Release.Namespace }}.
 
 key-auth is FAIL_CLOSE and rendered without its consumer list, which autoconfig
-(0.4.4 or later) adds. Until it has, key-auth rejects EVERY request on this
+(0.5.0 or later) adds. Until it has, key-auth rejects EVERY request on this
 gateway, fleet routes or not: harmless on a new gateway, an outage on one that
 already carries traffic. Check that the list is there:
 
