@@ -45,12 +45,13 @@ duplicate credential.
 
 ## ai-stream-guard
 
-On by default on every fleet route: autoconfig adds an empty rule per fleet (a fleet
-opts out with `spec.gateway.streamGuard.disabled: true`), and the rule takes its
-detectors from this chart's `streamGuard` (`defaultConfig`; `defaultConfigDisable`
-keeps it off every other route). The chart refuses an empty `streamGuard.detectors`:
-an empty rule would then have none, fail to parse, and stall configuration updates for
-every plugin on the gateway. On a cut the client gets the chunks up to the trigger,
+On by default on every fleet route: autoconfig adds a rule per fleet (a fleet opts out
+with `spec.gateway.streamGuard.disabled: true`) carrying a copy of this chart's
+`streamGuard`, rendered as the plugin's `defaultConfig`. With `defaultConfigDisable`
+the gateway is never sent `defaultConfig` (which keeps the detectors off every other
+route), so a rule must carry the detectors itself: on a rule without them the plugin
+fails to load, and the gateway keeps running the module it had before. The chart
+refuses an empty `streamGuard.detectors`. On a cut the client gets the chunks up to the trigger,
 a terminal chunk with `finish_reason: content_filter` and `[DONE]`, and no usage
 chunk. `/v1/messages` clients get `stop_reason: "content_filter"` and a
 `message_delta` without `usage`, which the Anthropic TypeScript SDK's `MessageStream`

@@ -112,10 +112,12 @@ spec:
 ---
 # Cuts a streamed answer that has fallen into a repetition loop: the client gets
 # the chunks up to the trigger, a terminal chunk (finish_reason content_filter by
-# default) and [DONE]. Every detection cuts. autoconfig adds an empty rule for
-# every fleet route that does not opt out; the rule inherits the detectors below
-# (measured: an empty rule takes defaultConfig even with defaultConfigDisable),
-# and defaultConfigDisable keeps them off every other route.
+# default) and [DONE]. Every detection cuts. autoconfig adds a rule for every
+# fleet route that does not opt out, carrying a copy of the defaultConfig below:
+# with defaultConfigDisable the gateway is never sent defaultConfig, so an empty
+# rule would have no detectors (measured: the plugin then fails to load, and the
+# gateway keeps running the previous module). defaultConfigDisable keeps the
+# detectors off every other route.
 # Priority 50, below ai-proxy's 100: on the response path the guard sees the
 # upstream's OpenAI stream before ai-proxy converts it (for /v1/messages), and a
 # cut comes after the first byte, so the spill EnvoyFilter never replays it.

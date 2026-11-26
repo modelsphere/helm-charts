@@ -7,7 +7,7 @@ backendRouter:
   spill: true
   maxRequestBodyBytes: 16777216
 # ai-stream-guard's detectors, for every fleet route that does not opt out.
-# autoconfig's rules are empty and inherit them; must not be empty. Fields: the
+# autoconfig copies them into each fleet rule; must not be empty. Fields: the
 # plugin's README (modelsphere/higress, plugins/wasm-go/extensions/ai-stream-guard).
 streamGuard:
   # 512 identical text chunks in a row (LiteLLM's REPEATED_STREAMING_CHUNK_LIMIT).
