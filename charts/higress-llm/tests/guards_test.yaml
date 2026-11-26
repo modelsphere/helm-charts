@@ -1,0 +1,120 @@
+# What the chart must keep doing wherever it is released: key-auth without a
+# consumer list (autoconfig owns it), no per-route rules, ai-stream-guard's
+# detectors in defaultConfig, and the two render-time refusals.
+suite: ownership and guards
+release:
+  name: higress-llm
+  namespace: higress-system
+tests:
+  - it: renders key-auth without defaultConfig.consumers, labelled for autoconfig
+    templates: [templates/wasmplugins.yaml]
+    documentSelector: {path: metadata.name, value: key-auth}
+    asserts:
+      - notExists: {path: spec.defaultConfig.consumers}
+      - equal: {path: spec.defaultConfig.global_auth, value: false}
+      - equal: {path: 'metadata.labels["routing.modelsphere.dev/consumers"]', value: autoconfig}
+      - equal: {path: spec.failStrategy, value: FAIL_CLOSE}
+
+  - it: writes no matchRules on any plugin
+    templates: [templates/wasmplugins.yaml]
+    asserts:
+      - notExists: {path: spec.matchRules}
+
+  - it: renders ai-stream-guard unbound, with its detectors in defaultConfig
+    templates: [templates/wasmplugins.yaml]
+    documentSelector: {path: metadata.name, value: ai-stream-guard}
+    asserts:
+      - equal: {path: spec.defaultConfigDisable, value: true}
+      - equal: {path: spec.priority, value: 50}
+      - equal: {path: spec.failStrategy, value: FAIL_OPEN}
+      - equal:
+          path: spec.defaultConfig.detectors
+          value: [{type: repetition, max_period: 1, min_repeated_chunks: 512}]
+      - notExists: {path: spec.defaultConfig.cutoff}
+
+  - it: renders a non-empty cutoff
+    templates: [templates/wasmplugins.yaml]
+    documentSelector: {path: metadata.name, value: ai-stream-guard}
+    set:
+      streamGuard.cutoff: {finish_reason: stop}
+    asserts:
+      - equal: {path: spec.defaultConfig.cutoff, value: {finish_reason: stop}}
+
+  - it: refuses empty streamGuard.detectors
+    templates: [templates/wasmplugins.yaml]
+    set:
+      streamGuard.detectors: []
+    asserts:
+      - failedTemplate: {errorPattern: "streamGuard.detectors must not be empty"}
+
+  - it: refuses a buffer below ai-backend-router's limit, naming it as an integer
+    templates: [templates/wasmplugins.yaml]
+    values: [values/buffer-1mib.yaml]
+    asserts:
+      - failedTemplate: {errorPattern: "maxRequestBodyBytes 1048576 is below ai-backend-router's own limit"}
+
+  - it: renders no EnvoyFilter with spill off
+    templates: [templates/envoyfilter.yaml]
+    set:
+      backendRouter.spill: false
+    asserts:
+      - hasDocuments: {count: 0}
+
+  # From a values file, as in a real install: YAML numbers there are floats, and
+  # without int64 the limit would render as 3.3554432e+07.
+  - it: renders the buffer limit as an integer
+    templates: [templates/envoyfilter.yaml]
+    values: [values/buffer-32mib.yaml]
+    asserts:
+      - equal: {path: 'spec.configPatches[1].patch.value.name', value: envoy.filters.http.buffer}
+      - equal: {path: 'spec.configPatches[1].patch.value.typed_config.max_request_bytes', value: 33554432}
+
+  # ---- order and failure handling of each plugin ----
+  - it: model-router runs at priority 900 in AUTHN, FAIL_OPEN
+    templates: [templates/wasmplugins.yaml]
+    documentSelector: {path: metadata.name, value: model-router}
+    asserts:
+      - equal: {path: spec.priority, value: 900}
+      - equal: {path: spec.failStrategy, value: FAIL_OPEN}
+      - equal: {path: spec.phase, value: AUTHN}
+      - notExists: {path: spec.defaultConfigDisable}
+  - it: key-auth runs at priority 310 in AUTHN, FAIL_CLOSE
+    templates: [templates/wasmplugins.yaml]
+    documentSelector: {path: metadata.name, value: key-auth}
+    asserts:
+      - equal: {path: spec.priority, value: 310}
+      - equal: {path: spec.failStrategy, value: FAIL_CLOSE}
+      - equal: {path: spec.phase, value: AUTHN}
+      - equal: {path: spec.defaultConfigDisable, value: false}
+  - it: ai-statistics runs at priority 200, FAIL_OPEN
+    templates: [templates/wasmplugins.yaml]
+    documentSelector: {path: metadata.name, value: ai-statistics}
+    asserts:
+      - equal: {path: spec.priority, value: 200}
+      - equal: {path: spec.failStrategy, value: FAIL_OPEN}
+      - notExists: {path: spec.phase}
+      - equal: {path: spec.defaultConfigDisable, value: true}
+  - it: ai-proxy runs at priority 100, FAIL_OPEN
+    templates: [templates/wasmplugins.yaml]
+    documentSelector: {path: metadata.name, value: ai-proxy}
+    asserts:
+      - equal: {path: spec.priority, value: 100}
+      - equal: {path: spec.failStrategy, value: FAIL_OPEN}
+      - notExists: {path: spec.phase}
+      - equal: {path: spec.defaultConfigDisable, value: true}
+  - it: ai-backend-router runs at priority 90, FAIL_CLOSE
+    templates: [templates/wasmplugins.yaml]
+    documentSelector: {path: metadata.name, value: ai-backend-router}
+    asserts:
+      - equal: {path: spec.priority, value: 90}
+      - equal: {path: spec.failStrategy, value: FAIL_CLOSE}
+      - notExists: {path: spec.phase}
+      - equal: {path: spec.defaultConfigDisable, value: true}
+  - it: ai-stream-guard runs at priority 50, FAIL_OPEN
+    templates: [templates/wasmplugins.yaml]
+    documentSelector: {path: metadata.name, value: ai-stream-guard}
+    asserts:
+      - equal: {path: spec.priority, value: 50}
+      - equal: {path: spec.failStrategy, value: FAIL_OPEN}
+      - notExists: {path: spec.phase}
+      - equal: {path: spec.defaultConfigDisable, value: true}

@@ -1,0 +1,26 @@
+# Usually filled in by an installer, e.g. modelsphere's
+# llmgateway/higress-llm.yaml.gotmpl (from its environments/*.yaml `higress:`). Defaults here only make the chart
+# render on its own (`helm template`). Models and consumers are not here: they are
+# ModelFleet and APIConsumer objects, written into the gateway by autoconfig.
+globalAuth: false
+backendRouter:
+  spill: true
+  maxRequestBodyBytes: 16777216
+# ai-stream-guard's detectors, for every fleet route that does not opt out.
+# autoconfig copies them into each fleet rule; must not be empty. Fields: the
+# plugin's README (modelsphere/higress, plugins/wasm-go/extensions/ai-stream-guard).
+streamGuard:
+  # 512 identical text chunks in a row (LiteLLM's REPEATED_STREAMING_CHUNK_LIMIT).
+  detectors:
+    - type: repetition
+      max_period: 1
+      min_repeated_chunks: 512
+  # What the client gets on a cut; {} = finish_reason content_filter, no message.
+  cutoff: {}
+plugins:
+  modelRouter: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/model-router:2.0.4
+  keyAuth: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/key-auth:2.0.0
+  aiStatistics: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-statistics:2.0.3
+  aiProxy: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-proxy:2.0.4
+  aiBackendRouter: oci://modelsphere.tencentcloudcr.com/4pdosc/higress-plugin-ai-backend-router:1.0.0
+  aiStreamGuard: oci://modelsphere.tencentcloudcr.com/4pdosc/higress-plugin-ai-stream-guard:1.0.0

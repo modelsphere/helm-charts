@@ -26,6 +26,9 @@ the chart history is there and in `git log charts/<chart>`, not in this file.
   directory (`helm unittest`).
 
 ### Changed
+- `hack/check-chart-images.sh` also checks the wasm plugins a chart's
+  `WasmPlugin` objects pull (`url: oci://...`), so a chart is not released
+  pointing at a plugin that has not been published.
 - GitHub Actions in `check-images.yml` and `release.yml` pinned to commit SHAs.
 - README names the project ModelSphere.
 

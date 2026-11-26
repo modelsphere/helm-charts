@@ -1,0 +1,139 @@
+{{- include "higress-llm.validate" . }}
+{{- $v := .Values }}
+{{- /*
+  No matchRules anywhere in this file: autoconfig adds one rule per ModelFleet
+  route to key-auth, ai-statistics, ai-proxy and ai-backend-router (and to
+  ai-stream-guard for a fleet that turns it on), and keeps
+  every rule it did not write. It only edits plugins that exist, so the chart
+  creates all of them, unbound (defaultConfigDisable) where a plugin only acts
+  on fleet routes. autoconfig looks for them in the fleet's
+  spec.gateway.namespace: it must be this release's namespace.
+*/}}
+---
+# Writes the request body's `model` into x-higress-llm-model, which the model
+# routes match on. Global: it has to run before a route is chosen, so it cannot
+# be bound to the routes it chooses between. It only acts on POSTs to
+# /completions, /embeddings, /messages and similar, and overwrites a
+# client-supplied header of the same name there.
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: model-router
+  namespace: {{ .Release.Namespace }}
+spec:
+  url: {{ $v.plugins.modelRouter }}
+  phase: AUTHN
+  priority: 900
+  failStrategy: FAIL_OPEN
+  defaultConfig:
+    modelToHeader: x-higress-llm-model
+---
+# Who may call. The consumers (callers and their keys) belong to autoconfig: it
+# renders one per APIConsumer object (routing.modelsphere.dev/v1alpha1) into
+# defaultConfig.consumers, so adding a tenant or rotating a key needs no release.
+# A fleet route's rule (spec.gateway.authConsumers of the ModelFleet) names the
+# consumers allowed on it; with global_auth false a route without a rule is open.
+# Rendered even before any APIConsumer exists: autoconfig writes the route before
+# the plugin rules, so a missing key-auth would leave a fleet that asked for
+# authentication served without it. With no consumers its callers are denied.
+{{- /*
+  The chart never renders defaultConfig.consumers. It is a list, so server-side
+  apply gives it one owner, and that owner is autoconfig: any value here would
+  be written over autoconfig's list on every upgrade. key-auth refuses a config
+  without the key and fails closed, so autoconfig adds an empty list when the
+  key is missing; until it does, right after a first install, key-auth rejects
+  every request on the gateway.
+*/}}
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: key-auth
+  namespace: {{ .Release.Namespace }}
+  labels:
+    # Hands defaultConfig.consumers of this object to autoconfig, in any
+    # namespace and before any APIConsumer or ModelFleet names this gateway.
+    routing.modelsphere.dev/consumers: autoconfig
+spec:
+  url: {{ $v.plugins.keyAuth }}
+  phase: AUTHN
+  priority: 310
+  # An authentication plugin that cannot run must not let requests through.
+  failStrategy: FAIL_CLOSE
+  defaultConfigDisable: false
+  defaultConfig:
+    # Placeholder: every consumer names its own header.
+    keys: [x-higress-dummy-key]
+    global_auth: {{ $v.globalAuth }}
+---
+# Token metrics and the per-request ai_log line, on fleet routes.
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-statistics
+  namespace: {{ .Release.Namespace }}
+spec:
+  url: {{ $v.plugins.aiStatistics }}
+  priority: 200
+  failStrategy: FAIL_OPEN
+  defaultConfigDisable: true
+---
+# Replaces the caller's key with the one openresty accepts (from the fleet's
+# upstreamAuthSecretRef), and converts /v1/messages (Anthropic) to chat
+# completions and back.
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-proxy
+  namespace: {{ .Release.Namespace }}
+spec:
+  url: {{ $v.plugins.aiProxy }}
+  priority: 100
+  failStrategy: FAIL_OPEN
+  defaultConfigDisable: true
+---
+# Picks a fleet member (an openresty route prefix) by tier, then weight, and
+# prefixes the path with it; the spill EnvoyFilter replays a request whose
+# member answered a retry code. Priority 90: after ai-proxy, whose path it
+# prefixes.
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-backend-router
+  namespace: {{ .Release.Namespace }}
+spec:
+  url: {{ $v.plugins.aiBackendRouter }}
+  priority: 90
+  # Unrouted, a request would reach openresty without a route prefix. The
+  # gateway pods fetch this module themselves: check the URL is reachable from
+  # them before changing it (one module that cannot load stalls configuration
+  # updates for every plugin on the gateway).
+  failStrategy: FAIL_CLOSE
+  defaultConfigDisable: true
+---
+# Cuts a streamed answer that has fallen into a repetition loop: the client gets
+# the chunks up to the trigger, a terminal chunk (finish_reason content_filter by
+# default) and [DONE]. Every detection cuts. autoconfig adds a rule for every
+# fleet route that does not opt out, carrying a copy of the defaultConfig below:
+# with defaultConfigDisable the gateway is never sent defaultConfig, so an empty
+# rule would have no detectors (measured: the plugin then fails to load, and the
+# gateway keeps running the previous module). defaultConfigDisable keeps the
+# detectors off every other route.
+# Priority 50, below ai-proxy's 100: on the response path the guard sees the
+# upstream's OpenAI stream before ai-proxy converts it (for /v1/messages), and a
+# cut comes after the first byte, so the spill EnvoyFilter never replays it.
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-stream-guard
+  namespace: {{ .Release.Namespace }}
+spec:
+  url: {{ $v.plugins.aiStreamGuard }}
+  priority: 50
+  # A guard that cannot run lets the stream through unchanged.
+  failStrategy: FAIL_OPEN
+  defaultConfigDisable: true
+  defaultConfig:
+    detectors: {{ toJson $v.streamGuard.detectors }}
+    {{- with $v.streamGuard.cutoff }}
+    cutoff: {{ toJson . }}
+    {{- end }}
