@@ -6,6 +6,17 @@ globalAuth: false
 backendRouter:
   spill: true
   maxRequestBodyBytes: 16777216
+# ai-stream-guard's detectors, for every fleet route that does not opt out.
+# autoconfig's rules are empty and inherit them; must not be empty. Fields: the
+# plugin's README (modelsphere/higress, plugins/wasm-go/extensions/ai-stream-guard).
+streamGuard:
+  # 512 identical text chunks in a row (LiteLLM's REPEATED_STREAMING_CHUNK_LIMIT).
+  detectors:
+    - type: repetition
+      max_period: 1
+      min_repeated_chunks: 512
+  # What the client gets on a cut; {} = finish_reason content_filter, no message.
+  cutoff: {}
 plugins:
   modelRouter: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/model-router:2.0.4
   keyAuth: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/key-auth:2.0.0

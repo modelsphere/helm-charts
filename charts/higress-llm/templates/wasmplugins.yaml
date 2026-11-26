@@ -112,13 +112,10 @@ spec:
 ---
 # Cuts a streamed answer that has fallen into a repetition loop: the client gets
 # the chunks up to the trigger, a terminal chunk (finish_reason content_filter by
-# default) and [DONE]. Every detection cuts; enabling the plugin on a route is
-# the switch, so it stays unbound until a fleet rule turns it on.
-{{- /*
-  No defaultConfig: with defaultConfigDisable the controller never sends it, so
-  each fleet rule carries its own detectors (the plugin refuses a config
-  without them), and with no rule the plugin is not pushed at all.
-*/}}
+# default) and [DONE]. Every detection cuts. autoconfig adds an empty rule for
+# every fleet route that does not opt out; the rule inherits the detectors below
+# (measured: an empty rule takes defaultConfig even with defaultConfigDisable),
+# and defaultConfigDisable keeps them off every other route.
 # Priority 50, below ai-proxy's 100: on the response path the guard sees the
 # upstream's OpenAI stream before ai-proxy converts it (for /v1/messages), and a
 # cut comes after the first byte, so the spill EnvoyFilter never replays it.
@@ -133,3 +130,8 @@ spec:
   # A guard that cannot run lets the stream through unchanged.
   failStrategy: FAIL_OPEN
   defaultConfigDisable: true
+  defaultConfig:
+    detectors: {{ toJson $v.streamGuard.detectors }}
+    {{- with $v.streamGuard.cutoff }}
+    cutoff: {{ toJson . }}
+    {{- end }}

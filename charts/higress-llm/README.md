@@ -12,7 +12,7 @@ OpenAI-compatible entry in front of OpenResty. It renders no workload: six
 | `ai-statistics` | token metrics and `ai_log` per route, model and caller |
 | `ai-proxy` | replaces the caller's key with the one OpenResty accepts |
 | `ai-backend-router` | picks a backend by tier and weight; with `backendRouter.spill`, the `EnvoyFilter` replays a request that got 429/502/503/504 on the next tier |
-| `ai-stream-guard` | cuts a streamed answer stuck in a repetition loop (`finish_reason: content_filter`); unbound until a fleet turns it on |
+| `ai-stream-guard` | cuts a streamed answer stuck in a repetition loop (`finish_reason: content_filter`), on fleet routes |
 
 **Nothing per model or per caller is configured here.** Routes come from `ModelFleet`
 objects and callers from `APIConsumer` objects (`routing.modelsphere.dev/v1alpha1`),
@@ -45,15 +45,18 @@ duplicate credential.
 
 ## ai-stream-guard
 
-Deployed unbound: it acts only on routes whose fleet rule turns it on, and that
-rule carries the detectors (with `defaultConfigDisable` the gateway never receives a
-`defaultConfig`, and the plugin refuses a config without detectors). On a cut the
-client gets the chunks up to the trigger, a terminal chunk with
-`finish_reason: content_filter` and `[DONE]`, and no usage chunk. `/v1/messages`
-clients get `stop_reason: "content_filter"` and a `message_delta` without `usage`,
-which the Anthropic TypeScript SDK's `MessageStream` reports as an error. A cut
-happens after the first byte, so it is never spilled to another tier. See the
-plugin's [README](https://github.com/modelsphere/higress/tree/main/plugins/wasm-go/extensions/ai-stream-guard)
+On by default on every fleet route: autoconfig adds an empty rule per fleet (a fleet
+opts out with `spec.gateway.streamGuard.disabled: true`), and the rule takes its
+detectors from this chart's `streamGuard` (`defaultConfig`; `defaultConfigDisable`
+keeps it off every other route). The chart refuses an empty `streamGuard.detectors`:
+an empty rule would then have none, fail to parse, and stall configuration updates for
+every plugin on the gateway. On a cut the client gets the chunks up to the trigger,
+a terminal chunk with `finish_reason: content_filter` and `[DONE]`, and no usage
+chunk. `/v1/messages` clients get `stop_reason: "content_filter"` and a
+`message_delta` without `usage`, which the Anthropic TypeScript SDK's `MessageStream`
+reports as an error. A cut happens after the first byte, so it is never spilled to
+another tier. The plugin is `FAIL_OPEN`: if it cannot load, streams pass uncut. See
+the plugin's [README](https://github.com/modelsphere/higress/tree/main/plugins/wasm-go/extensions/ai-stream-guard)
 for the detectors and the `ai_log` attributes.
 
 ## Values
@@ -63,4 +66,6 @@ for the detectors and the `ai_log` attributes.
 | `globalAuth` | `false` | `false`: key-auth checks only routes that have an allow list; `true`: every route needs a known key |
 | `backendRouter.spill` | `true` | replay to the next tier; buffers request bodies on every route of the gateway |
 | `backendRouter.maxRequestBodyBytes` | `16777216` | buffer limit (larger requests get 413); the chart refuses less than ai-backend-router's own 16 MiB |
+| `streamGuard.detectors` | repetition, 512 chunks | ai-stream-guard's detectors for fleet routes; must not be empty |
+| `streamGuard.cutoff` | `{}` | what a client gets on a cut (`finish_reason`, `message`) |
 | `plugins.*` | see `values.yaml` | plugin image URLs; the gateway pods pull them themselves |
