@@ -30,7 +30,8 @@ key-auth refuses a config without the list and fails closed, so autoconfig adds 
 empty list when it is missing. **This needs autoconfig 0.4.4 or later, installed
 first**: an earlier release never adds the list, and the gateway stays closed. Install
 in the order higress-core, autoconfig, this chart: with the WasmPlugin CRD in place
-when autoconfig starts, it adds the list as soon as key-auth appears (an autoconfig
+when autoconfig starts, it adds the list once key-auth appears: measured about 5 s for
+the first key-auth after autoconfig starts, about 0.3 s after that (an autoconfig
 started before Higress picks it up on its next periodic pass). Between this chart
 creating key-auth and autoconfig adding the list, key-auth rejects every request on
 the gateway: harmless on a new gateway, an outage on one that already serves other
