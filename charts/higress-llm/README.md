@@ -34,8 +34,8 @@ key-auth before rendering (`lookup`):
 
 Without a cluster connection `lookup` returns nothing, so an offline render takes the
 first row. **Do not install or sync this chart through anything that renders it
-offline and applies the result** (`helm template | kubectl apply`, Argo CD, Flux's
-post-render setups): that writes `consumers: []` over autoconfig's list, and every
+offline and applies the result** (`helm template | kubectl apply`, Argo CD, which
+renders with `helm template`, kustomize's `helmCharts`): that writes `consumers: []` over autoconfig's list, and every
 route with an allow list answers 401 to everyone until autoconfig's next resync.
 Use `helm install/upgrade` (or `helm template --dry-run=server`) with access to the
 cluster. `helm template` and `helm diff` without it show `consumers: []` even when an
