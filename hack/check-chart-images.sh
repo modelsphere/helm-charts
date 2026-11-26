@@ -9,7 +9,8 @@
 #
 # For each chart that would be released (its Chart.yaml version differs from BASE, or
 # the chart is new), render it with its defaults, collect every `image:` it asks for,
-# and ask the registry for each one. Any image that cannot be resolved fails the run.
+# and ask the registry for each one (wasm plugins referenced as `url: oci://...`
+# too). Any image that cannot be resolved fails the run.
 #
 #   hack/check-chart-images.sh <base-ref>   charts whose version changed since <base-ref>
 #   hack/check-chart-images.sh --all        every chart
@@ -54,7 +55,11 @@ for c in "${charts[@]}"; do
   # shellcheck disable=SC2046
   render=$(helm template ci "charts/$c" $(extra_values "$c")) \
     || { echo "FAIL $c: does not render with its defaults"; missing=$((missing+1)); continue; }
-  images=$(printf '%s\n' "$render" | sed -nE 's/^[[:space:]-]*image:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' | sort -u)
+  # Container images, plus the wasm plugins a Higress WasmPlugin pulls (`url: oci://...`):
+  # the gateway fetches those itself, and a missing one stalls every plugin update on it.
+  images=$(printf '%s\n' "$render" | sed -nE \
+    -e 's/^[[:space:]-]*image:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' \
+    -e 's#^[[:space:]-]*url:[[:space:]]*"?oci://([^"[:space:]]+)"?.*#\1#p' | sort -u)
   if [ -z "$images" ]; then echo "FAIL $c: renders no image at all -- the check would be meaningless"; missing=$((missing+1)); continue; fi
   echo "== $c $(version_of < "charts/$c/Chart.yaml")"
   for img in $images; do
