@@ -16,8 +16,8 @@ OpenAI-compatible entry in front of OpenResty. It renders no workload: five
 **Nothing per model or per caller is configured here.** Routes come from `ModelFleet`
 objects and callers from `APIConsumer` objects (`routing.modelsphere.dev/v1alpha1`),
 which [autoconfig](../autoconfig) writes into the Ingresses and the plugins'
-`matchRules` and into key-auth's `defaultConfig.consumers`. It needs an autoconfig
-release with the ModelFleet and APIConsumer controllers.
+`matchRules` and into key-auth's `defaultConfig.consumers`. It needs autoconfig 0.4.4
+or later (the ModelFleet and APIConsumer controllers).
 
 ## key-auth's consumer list belongs to autoconfig
 
@@ -27,7 +27,8 @@ autoconfig's list on every upgrade. The chart therefore renders the same thing o
 and offline (`helm template`, Argo CD).
 
 key-auth refuses a config without the list and fails closed, so autoconfig adds an
-empty list when it is missing. **Install autoconfig first.** Between this chart
+empty list when it is missing. **This needs autoconfig 0.4.4 or later, installed
+first**: an earlier release never adds the list, and the gateway stays closed. Between this chart
 creating key-auth and autoconfig adding the list, key-auth rejects every request on
 the gateway: harmless on a new gateway, an outage on one that already serves other
 traffic.
