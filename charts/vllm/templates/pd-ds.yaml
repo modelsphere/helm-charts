@@ -194,6 +194,11 @@ spec:
   ports:
   - { name: http, port: {{ $root.Values.service.port }}, targetPort: http }
 {{- $routerReplicas := int ($pd.router.replicas | default 2) }}
+{{- $routerPreStop := $pd.router.preStop | default dict }}
+{{- $routerPreStopSecs := 120 }}
+{{- if not (kindIs "invalid" $routerPreStop.endpointSyncSeconds) }}
+{{- $routerPreStopSecs = int $routerPreStop.endpointSyncSeconds }}
+{{- end }}
 ---
 # Router for slice {{ $s }}: resolves this slice's two headless Services into
 # repeated --prefill / --decode flags, so the router sees every group leader
@@ -235,14 +240,9 @@ spec:
         component: router
         slice: "{{ $s }}"
     spec:
-      # The router's own budget, NOT the engines'. 30s was sized for a front-end
-      # that answers short-lived HTTP; the pd router holds long-lived streams
-      # back to prefill and decode, and a hard SIGKILL mid-request leaves the
-      # client facing an aborted stream and the peer engines holding half-
-      # finished KV state. 600s gives in-flight requests and router-side
-      # cancellation propagation a real window; the pod is not GPU-bearing, so
-      # holding it longer costs only node bookkeeping.
-      terminationGracePeriodSeconds: 600
+      # The router's own budget, NOT the engines'. Sized to cover preStop
+      # endpointSyncSeconds plus router graceful drain (floored at 600s).
+      terminationGracePeriodSeconds: {{ max 600 (add 580 $routerPreStopSecs) }}
       {{- /* Placement gates init, not the router's boot script. An init
              container can wait unbounded (no probes, no budget tension), and
              while it runs kubectl shows Init:0/1 -- "never scheduled" is a
@@ -455,7 +455,7 @@ spec:
         lifecycle:
           preStop:
             exec:
-              command: ["bash", "-lc", "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep 20"]
+              command: ["bash", "-lc", "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep {{ $routerPreStopSecs }}"]
         {{- $routerEnv := list (dict "name" "POD_IP" "valueFrom" (dict "fieldRef" (dict "fieldPath" "status.podIP"))) }}
         env:
         {{- include "vllm.mergeEnv" (dict "chart" $routerEnv "user" $root.Values.env "padding" 8) }}
