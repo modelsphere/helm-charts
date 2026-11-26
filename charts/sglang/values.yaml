@@ -257,8 +257,8 @@ pd:
     tolerationsReplace: null
     preStop:
       # Sleep after marking /tmp/pd-router/draining (NotReady) before SIGTERM.
-      # - Default 120s (modelsphere/modelsphere#92): covers EndpointSlice ->
-      #   autoconfig ConfigMap -> kubelet sync -> CART reload lag.
+      # - Default 120s , a safer guards because of modelsphere/modelsphere#92.
+      #   Should covers EndpointSlice ob (<5s) -> autoconfig ConfigMap -> kubelet sync (up to 90s approximately) -> CART reload lag.
       # - Lower (e.g. 5-20s) once #92 is fixed; 0 skips sleep (still marks draining).
       endpointSyncSeconds: 120
     # Readiness. In both pd shapes the router container carries an exec
