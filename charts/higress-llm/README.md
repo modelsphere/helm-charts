@@ -1,7 +1,7 @@
 # higress-llm
 
 The gateway-wide plugin config that makes a [Higress](https://higress.io) gateway an
-OpenAI-compatible entry in front of OpenResty. It renders no workload: five
+OpenAI-compatible entry in front of OpenResty. It renders no workload: six
 `WasmPlugin` objects and one `EnvoyFilter` for a gateway installed by the upstream
 `higress-core` chart (`https://higress.io/helm-charts`), in the same namespace.
 
@@ -12,6 +12,7 @@ OpenAI-compatible entry in front of OpenResty. It renders no workload: five
 | `ai-statistics` | token metrics and `ai_log` per route, model and caller |
 | `ai-proxy` | replaces the caller's key with the one OpenResty accepts |
 | `ai-backend-router` | picks a backend by tier and weight; with `backendRouter.spill`, the `EnvoyFilter` replays a request that got 429/502/503/504 on the next tier |
+| `ai-stream-guard` | cuts a streamed answer stuck in a repetition loop (`finish_reason: content_filter`); unbound until a fleet turns it on |
 
 **Nothing per model or per caller is configured here.** Routes come from `ModelFleet`
 objects and callers from `APIConsumer` objects (`routing.modelsphere.dev/v1alpha1`),
@@ -41,6 +42,19 @@ traffic.
 
 Each key may belong to one consumer only: key-auth rejects the whole config on a
 duplicate credential.
+
+## ai-stream-guard
+
+Deployed unbound: it acts only on routes whose fleet rule turns it on, and that
+rule carries the detectors (with `defaultConfigDisable` the gateway never receives a
+`defaultConfig`, and the plugin refuses a config without detectors). On a cut the
+client gets the chunks up to the trigger, a terminal chunk with
+`finish_reason: content_filter` and `[DONE]`, and no usage chunk. `/v1/messages`
+clients get `stop_reason: "content_filter"` and a `message_delta` without `usage`,
+which the Anthropic TypeScript SDK's `MessageStream` reports as an error. A cut
+happens after the first byte, so it is never spilled to another tier. See the
+plugin's [README](https://github.com/modelsphere/higress/tree/main/plugins/wasm-go/extensions/ai-stream-guard)
+for the detectors and the `ai_log` attributes.
 
 ## Values
 

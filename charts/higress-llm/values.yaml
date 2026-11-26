@@ -12,3 +12,4 @@ plugins:
   aiStatistics: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-statistics:2.0.3
   aiProxy: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/ai-proxy:2.0.4
   aiBackendRouter: oci://modelsphere.tencentcloudcr.com/4pdosc/higress-plugin-ai-backend-router:1.0.0
+  aiStreamGuard: oci://modelsphere.tencentcloudcr.com/4pdosc/higress-plugin-ai-stream-guard:1.0.0

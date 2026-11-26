@@ -1,6 +1,6 @@
 apiVersion: v2
 name: higress-llm
-description: "Gateway-wide plugins that put Higress in front of openresty as an OpenAI-compatible entry: model routing from the request body, per-caller API keys, token statistics, key swap to the upstream, and tiered backends with spill. Per-model routes and callers come from ModelFleet and APIConsumer objects via autoconfig"
+description: "Gateway-wide plugins that put Higress in front of openresty as an OpenAI-compatible entry: model routing from the request body, per-caller API keys, token statistics, key swap to the upstream, tiered backends with spill, and cutting streams stuck in a repetition loop. Per-model routes and callers come from ModelFleet and APIConsumer objects via autoconfig"
 home: https://github.com/modelsphere/helm-charts
 sources:
   - https://github.com/modelsphere/helm-charts

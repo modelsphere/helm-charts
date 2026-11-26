@@ -2,7 +2,8 @@
 {{- $v := .Values }}
 {{- /*
   No matchRules anywhere in this file: autoconfig adds one rule per ModelFleet
-  route to key-auth, ai-statistics, ai-proxy and ai-backend-router, and keeps
+  route to key-auth, ai-statistics, ai-proxy and ai-backend-router (and to
+  ai-stream-guard for a fleet that turns it on), and keeps
   every rule it did not write. It only edits plugins that exist, so the chart
   creates all of them, unbound (defaultConfigDisable) where a plugin only acts
   on fleet routes. autoconfig looks for them in the fleet's
@@ -107,4 +108,28 @@ spec:
   # them before changing it (one module that cannot load stalls configuration
   # updates for every plugin on the gateway).
   failStrategy: FAIL_CLOSE
+  defaultConfigDisable: true
+---
+# Cuts a streamed answer that has fallen into a repetition loop: the client gets
+# the chunks up to the trigger, a terminal chunk (finish_reason content_filter by
+# default) and [DONE]. Every detection cuts; enabling the plugin on a route is
+# the switch, so it stays unbound until a fleet rule turns it on.
+{{- /*
+  No defaultConfig: with defaultConfigDisable the controller never sends it, so
+  each fleet rule carries its own detectors (the plugin refuses a config
+  without them), and with no rule the plugin is not pushed at all.
+*/}}
+# Priority 50, below ai-proxy's 100: on the response path the guard sees the
+# upstream's OpenAI stream before ai-proxy converts it (for /v1/messages), and a
+# cut comes after the first byte, so the spill EnvoyFilter never replays it.
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: ai-stream-guard
+  namespace: {{ .Release.Namespace }}
+spec:
+  url: {{ $v.plugins.aiStreamGuard }}
+  priority: 50
+  # A guard that cannot run lets the stream through unchanged.
+  failStrategy: FAIL_OPEN
   defaultConfigDisable: true
