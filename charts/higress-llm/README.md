@@ -19,27 +19,18 @@ which [autoconfig](../autoconfig) writes into the Ingresses and the plugins'
 `matchRules` and into key-auth's `defaultConfig.consumers`. It needs an autoconfig
 release with the ModelFleet and APIConsumer controllers.
 
-## Render it against the cluster, never offline
+## key-auth's consumer list belongs to autoconfig
 
-key-auth refuses a config without a consumer list and fails closed, and under
-server-side apply that list has one owner: autoconfig. So the chart looks at the live
-key-auth before rendering (`lookup`):
+The chart renders key-auth without `defaultConfig.consumers`. The list has one owner
+under server-side apply, autoconfig, so a value rendered here would be written over
+autoconfig's list on every upgrade. The chart therefore renders the same thing online
+and offline (`helm template`, Argo CD).
 
-| Live key-auth | Rendered `consumers` |
-|---|---|
-| none | `[]` |
-| list owned by helm alone, empty | `[]` |
-| list owned by any other manager (autoconfig) | left out |
-| list owned by helm alone, non-empty | refuses to render |
-
-Without a cluster connection `lookup` returns nothing, so an offline render takes the
-first row. **Do not install or sync this chart through anything that renders it
-offline and applies the result** (`helm template | kubectl apply`, Argo CD, which
-renders with `helm template`, kustomize's `helmCharts`): that writes `consumers: []` over autoconfig's list, and every
-route with an allow list answers 401 to everyone until autoconfig's next resync.
-Use `helm install/upgrade` (or `helm template --dry-run=server`) with access to the
-cluster. `helm template` and `helm diff` without it show `consumers: []` even when an
-upgrade will leave the list out.
+key-auth refuses a config without the list and fails closed, so autoconfig adds an
+empty list when it is missing. **Install autoconfig first.** Between this chart
+creating key-auth and autoconfig adding the list, key-auth rejects every request on
+the gateway: harmless on a new gateway, an outage on one that already serves other
+traffic.
 
 Each key may belong to one consumer only: key-auth rejects the whole config on a
 duplicate credential.

@@ -36,39 +36,13 @@ spec:
 # the plugin rules, so a missing key-auth would leave a fleet that asked for
 # authentication served without it. With no consumers its callers are denied.
 {{- /*
-  defaultConfig.consumers is a list, so server-side apply gives it one owner.
-  key-auth refuses a config with neither consumers nor credentials, and the
-  plugin fails closed, so the key must always be there; which side writes it
-  depends on who owns it in the live object:
-  - no key-auth yet (first install; also helm template and client-side
-    dry runs, where lookup returns nothing): render an empty list;
-  - anyone else owns it (autoconfig), alone or together with this chart:
-    leave it out. A field is only removed when its last owner drops it, so
-    dropping the chart's share leaves autoconfig's list in place;
-  - only this chart owns it and it is empty: keep rendering the empty list
-    (same value, no change). Not rendering it would make helm remove the field;
-  - only this chart owns it and it is not empty: fail. Those are consumers
-    from an earlier chart's values; rendering [] would deny all of them, and
-    not rendering would remove the field. autoconfig has to take it over first.
+  The chart never renders defaultConfig.consumers. It is a list, so server-side
+  apply gives it one owner, and that owner is autoconfig: any value here would
+  be written over autoconfig's list on every upgrade. key-auth refuses a config
+  without the key and fails closed, so autoconfig adds an empty list when the
+  key is missing; until it does, right after a first install, key-auth rejects
+  every request on the gateway.
 */}}
-{{- $consumersLine := true }}
-{{- $live := lookup "extensions.higress.io/v1alpha1" "WasmPlugin" .Release.Namespace "key-auth" }}
-{{- if $live }}
-{{-   $chartOwns := false }}
-{{-   $otherOwns := false }}
-{{-   range $mf := (dig "metadata" "managedFields" list $live) }}
-{{-     $dc := dig "f:spec" "f:defaultConfig" dict (default dict $mf.fieldsV1) }}
-{{-     if hasKey $dc "f:consumers" }}
-{{-       if eq $mf.manager "helm" }}{{ $chartOwns = true }}{{ else }}{{ $otherOwns = true }}{{ end }}
-{{-     end }}
-{{-   end }}
-{{-   $liveConsumers := dig "spec" "defaultConfig" "consumers" list $live }}
-{{-   if $otherOwns }}
-{{-     $consumersLine = false }}
-{{-   else if $chartOwns }}
-{{-     if $liveConsumers }}{{ fail (printf "key-auth in %s holds %d consumers owned by helm alone; rendering an empty list would deny them all and leaving it out would delete the field. Consumers are APIConsumer objects now, written by autoconfig: create one per consumer (credentials in a Secret) with an autoconfig release that has the APIConsumer controller, wait until autoconfig owns key-auth's defaultConfig.consumers (metadata.managedFields), then upgrade." .Release.Namespace (len $liveConsumers)) }}{{ end }}
-{{-   end }}
-{{- end }}
 apiVersion: extensions.higress.io/v1alpha1
 kind: WasmPlugin
 metadata:
@@ -85,9 +59,6 @@ spec:
     # Placeholder: every consumer names its own header.
     keys: [x-higress-dummy-key]
     global_auth: {{ $v.globalAuth }}
-{{- if $consumersLine }}
-    consumers: []
-{{- end }}
 ---
 # Token metrics and the per-request ai_log line, on fleet routes.
 apiVersion: extensions.higress.io/v1alpha1
