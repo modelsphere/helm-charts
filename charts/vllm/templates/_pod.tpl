@@ -1513,6 +1513,13 @@ def hung():
 
 deadline = time.monotonic() + {{ $preStop.drainSeconds }}
 {{- if $pdDs }}
+{{- $routerReplicas := int ($root.Values.pd.router.replicas | default 2) }}
+{{- $routerPreStop := $root.Values.pd.router.preStop | default dict }}
+{{- $routerPreStopSecs := 120 }}
+{{- if not (kindIs "invalid" $routerPreStop.endpointSyncSeconds) }}
+{{- $routerPreStopSecs = int $routerPreStop.endpointSyncSeconds }}
+{{- end }}
+{{- $routerWaitCap := max 240 (add 200 (mul $routerReplicas $routerPreStopSecs)) }}
 # Evict from Ready PD routers before draining in-flight requests.
 POD_IP = os.environ.get("POD_IP", "")
 PD_SLICE = os.environ.get("PD_SLICE", "")
@@ -1521,8 +1528,8 @@ NS = {{ $root.Release.Namespace | quote }}
 PD_ROLE = {{ $pdRoleName | quote }}
 HTTP_PORT = {{ $httpPort }}
 ROUTER_PORT = {{ $root.Values.service.port }}
-ROUTER_REPLICAS = {{ int ($root.Values.pd.router.replicas | default 2) }}
-ROUTER_WAIT_CAP = min(240, {{ $preStop.drainSeconds }})
+ROUTER_REPLICAS = {{ $routerReplicas }}
+ROUTER_WAIT_CAP = min({{ $routerWaitCap }}, {{ $preStop.drainSeconds }})
 if POD_IP and PD_SLICE:
     ROUTER_HL = f"{FULLNAME}-router-hl-s{PD_SLICE}.{NS}.svc.cluster.local."
     ROLE_HL = f"{FULLNAME}-{PD_ROLE}-hl-s{PD_SLICE}.{NS}.svc.cluster.local."

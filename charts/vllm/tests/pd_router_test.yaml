@@ -246,8 +246,11 @@ tests:
           path: spec.template.spec.containers[?(@.name == "router")].readinessProbe.exec.command[2]
           pattern: 'timeout=5'
       - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 700
+      - equal:
           path: spec.template.spec.containers[?(@.name == "router")].lifecycle.preStop.exec.command[2]
-          value: "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep 20"
+          value: "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep 120"
       - contains:
           path: spec.template.spec.containers[?(@.name == "router")].env
           content:
@@ -419,7 +422,77 @@ tests:
           path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
           pattern: '/remove_worker'
       - matchRegex:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
+          pattern: 'ROUTER_WAIT_CAP = min\(440, 600\)'
+      - matchRegex:
           path: spec.roles[1].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
           pattern: '\{PD_ROLE\}-hl-s'
       - isNull:
           path: spec.roles[0].spec.leaderWorkerTemplate.workerTemplate.spec.containers[?(@.name == "vllm")].lifecycle
+
+  - it: pd-ds honors pd.router.preStop.endpointSyncSeconds overrides including 0 and scales terminationGracePeriodSeconds
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      pd.router.preStop.endpointSyncSeconds: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 600
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].lifecycle.preStop.exec.command[2]
+          value: "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep 0"
+
+  - it: pd-ds scales terminationGracePeriodSeconds above 600 when pd.router.preStop.endpointSyncSeconds is large
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: metadata.name
+      value: ci-router-s0
+    set:
+      pd.router.preStop.endpointSyncSeconds: 200
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 780
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].lifecycle.preStop.exec.command[2]
+          value: "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep 200"
+
+  - it: colocate router renders default 120s preStop and honors endpointSyncSeconds override
+    template: templates/pd-colocate.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      pd.colocate: true
+      pd.router.preStop.endpointSyncSeconds: 45
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name == "router")].lifecycle.preStop.exec.command[2]
+          value: "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep 45"
+
+  - it: pd-ds preStop keeps 240s ROUTER_WAIT_CAP floor when pd.router.preStop.endpointSyncSeconds is 0
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    set:
+      pd.router.preStop.endpointSyncSeconds: 0
+    asserts:
+      - matchRegex:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
+          pattern: 'ROUTER_WAIT_CAP = min\(240, 600\)'
+
+  - it: pd-ds preStop scales ROUTER_WAIT_CAP when pd.router.preStop.endpointSyncSeconds is 200
+    template: templates/pd-ds.yaml
+    documentSelector:
+      path: kind
+      value: DisaggregatedSet
+    set:
+      pd.router.preStop.endpointSyncSeconds: 200
+    asserts:
+      - matchRegex:
+          path: spec.roles[0].spec.leaderWorkerTemplate.leaderTemplate.spec.containers[?(@.name == "vllm")].lifecycle.preStop.exec.command[2]
+          pattern: 'ROUTER_WAIT_CAP = min\(600, 600\)'

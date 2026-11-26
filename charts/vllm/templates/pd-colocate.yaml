@@ -155,6 +155,15 @@ spec:
             "prefill" (dict "host" "127.0.0.1" "port" ($pd.prefill.httpPort | default 8001) "path" "/health")
             "decode"  (dict "host" "127.0.0.1" "port" ($pd.decode.httpPort | default 8002) "path" "/health") }}
         {{- include "vllm.pdRouterProbes" (dict "roles" $probeRoles) | nindent 8 }}
+        {{- $routerPreStop := $pd.router.preStop | default dict }}
+        {{- $routerPreStopSecs := 120 }}
+        {{- if not (kindIs "invalid" $routerPreStop.endpointSyncSeconds) }}
+        {{- $routerPreStopSecs = int $routerPreStop.endpointSyncSeconds }}
+        {{- end }}
+        lifecycle:
+          preStop:
+            exec:
+              command: ["bash", "-lc", "mkdir -p /tmp/pd-router && touch /tmp/pd-router/draining && sleep {{ $routerPreStopSecs }}"]
         {{- with $root.Values.env }}
         env:
         {{- include "vllm.mergeEnv" (dict "chart" list "user" . "padding" 8) }}

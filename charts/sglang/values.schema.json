@@ -202,7 +202,14 @@
               }
             },
             "affinityReplace": { "type": ["object", "null"] },
-            "tolerationsReplace": { "type": ["array", "null"] }
+            "tolerationsReplace": { "type": ["array", "null"] },
+            "preStop": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "endpointSyncSeconds": { "type": "integer", "minimum": 0 }
+              }
+            }
           }
         }
       }
