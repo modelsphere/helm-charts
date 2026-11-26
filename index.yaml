@@ -783,6 +783,30 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/continuation-gateway-0.1.0/continuation-gateway-0.1.0.tgz
     version: 0.1.0
+  higress-llm:
+  - apiVersion: v2
+    created: "2026-11-26T16:23:26.723191403Z"
+    description: 'Gateway-wide plugins that put Higress in front of openresty as an
+      OpenAI-compatible entry: model routing from the request body, per-caller API
+      keys, token statistics, key swap to the upstream, tiered backends with spill,
+      and cutting streams stuck in a repetition loop. Per-model routes and callers
+      come from ModelFleet and APIConsumer objects via autoconfig'
+    digest: 4ec1da0be22b4eefc1a29a3b54ce1404e38a8f298a192072e627004db87e5f0f
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - higress
+    - wasm
+    - llm-gateway
+    - api-key
+    - autoconfig
+    name: higress-llm
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/higress
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/higress-llm-0.1.0/higress-llm-0.1.0.tgz
+    version: 0.1.0
   llm-autotune:
   - apiVersion: v2
     appVersion: 0.3.0
@@ -3744,4 +3768,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-11-26T09:09:51.334106069Z"
+generated: "2026-11-26T16:23:26.723414436Z"
