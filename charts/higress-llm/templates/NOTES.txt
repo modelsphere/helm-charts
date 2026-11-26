@@ -1,0 +1,13 @@
+higress-llm {{ .Chart.Version }}: the gateway-wide plugins in {{ .Release.Namespace }}.
+
+key-auth is FAIL_CLOSE and rendered without its consumer list, which autoconfig
+(0.4.4 or later) adds. Until it has, key-auth rejects EVERY request on this
+gateway, fleet routes or not: harmless on a new gateway, an outage on one that
+already carries traffic. Check that the list is there:
+
+  kubectl -n {{ .Release.Namespace }} get wasmplugin key-auth -o jsonpath='{.spec.defaultConfig.consumers}'
+
+(an empty list `[]` is fine; no output means autoconfig has not added it yet).
+
+Routes and callers are ModelFleet and APIConsumer objects; autoconfig writes
+them into this gateway's Ingresses and plugin rules.

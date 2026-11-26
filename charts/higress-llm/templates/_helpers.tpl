@@ -6,6 +6,6 @@
 */}}
 {{- define "higress-llm.validate" -}}
 {{- $v := .Values -}}
-{{- if lt (int64 $v.backendRouter.maxRequestBodyBytes) 16777216 }}{{ fail (printf "backendRouter.maxRequestBodyBytes %v is below ai-backend-router's own limit (16777216, set by autoconfig): a body the router accepts could not be replayed on spill." $v.backendRouter.maxRequestBodyBytes) }}{{ end }}
+{{- if lt (int64 $v.backendRouter.maxRequestBodyBytes) 16777216 }}{{ fail (printf "backendRouter.maxRequestBodyBytes %d is below ai-backend-router's own limit (16777216, set by autoconfig): a body the router accepts could not be replayed on spill." (int64 $v.backendRouter.maxRequestBodyBytes)) }}{{ end }}
 {{- if not $v.streamGuard.detectors }}{{ fail "streamGuard.detectors must not be empty: autoconfig copies ai-stream-guard's defaultConfig into each fleet rule, and the plugin fails to load on a rule without detectors." }}{{ end }}
 {{- end -}}

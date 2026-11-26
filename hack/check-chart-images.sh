@@ -60,7 +60,7 @@ for c in "${charts[@]}"; do
   # oci:// plugin URLs can be resolved here; any other scheme fails the chart.
   # spec.url of each WasmPlugin (top-level kind, url two spaces in under spec).
   wasm=$(printf '%s\n' "$render" | awk '/^---/{w=0} /^kind:[[:space:]]*WasmPlugin[[:space:]]*$/{w=1}
-    w && /^  url:/{u=$2; gsub(/"/,"",u); print u}' | sort -u)
+    w && /^  url:/{u=$2; gsub(/["\047]/,"",u); print u}' | sort -u)
   other=$(printf '%s\n' "$wasm" | grep -v -e '^oci://' -e '^$' || true)
   if [ -n "$other" ]; then
     echo "FAIL $c: WasmPlugin url(s) this check cannot resolve, use oci://: $(echo $other)"
