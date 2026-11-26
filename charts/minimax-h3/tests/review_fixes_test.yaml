@@ -1,0 +1,406 @@
+# The per-release database, the DSN's escaping, the base URL's trailing slash,
+# an upgrade with --reuse-values from 0.2, and the queue-depth / queue-query
+# rules of the JobSLORequirements.
+suite: database, base URL, 0.2 upgrade and queue rules
+release:
+  name: h3
+  namespace: video
+capabilities:
+  apiVersions:
+    - routing.modelsphere.dev/v1alpha1
+tests:
+  # ---- per-release database ----
+  - it: by default the release gets its own database on the shared cluster
+    templates: [templates/database.yaml]
+    kubernetesProvider: &cnpgSecret
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: cnpg-rw, namespace: middleware}
+          # base64 of "p@ss:w/rd#1%"
+          data: {password: cEBzczp3L3JkIzEl}
+    asserts:
+      - hasDocuments: {count: 1}
+      - isKind: {of: Database}
+      - equal: {path: apiVersion, value: postgresql.cnpg.io/v1}
+      - equal: {path: metadata.name, value: h3-video-h3-c3b29878}
+      - equal: {path: metadata.namespace, value: middleware}
+      - equal:
+          path: spec
+          value: {cluster: {name: cnpg}, name: h3_video_h3_c3b29878, owner: h3, ensure: present, databaseReclaimPolicy: retain}
+
+  - it: the DSN names the release's database and escapes the password
+    templates: [templates/db-secret.yaml]
+    kubernetesProvider: *cnpgSecret
+    asserts:
+      - equal:
+          path: stringData.url
+          value: postgresql://h3:p%40ss%3Aw%2Frd%231%25@cnpg-rw.middleware.svc.cluster.local:5432/h3_video_h3_c3b29878
+
+  - it: the per-release name is lowercased, made [a-z0-9_] and kept within 63
+    templates: [templates/database.yaml]
+    release:
+      name: h3.video-test
+      namespace: a-very-long-namespace-name-for-video-generation-services
+    kubernetesProvider: *cnpgSecret
+    asserts:
+      - equal: {path: spec.name, value: h3_a_very_long_namespace_name_for_video_generation_ser_1c00e149}
+      - equal: {path: metadata.name, value: h3-a-very-long-namespace-name-for-video-generation-ser-1c00e149}
+
+  - it: two long names that share a prefix get different databases
+    templates: [templates/database.yaml]
+    release:
+      name: h3-other
+      namespace: a-very-long-namespace-name-for-video-generation-services
+    kubernetesProvider: *cnpgSecret
+    asserts:
+      - equal: {path: spec.name, value: h3_a_very_long_namespace_name_for_video_generation_ser_f2cb6b66}
+
+  # - folds into _, so namespace and release alone would give both of these h3_video_a_h3.
+  - it: video-a/h3 and video/a-h3 get different databases (1 of 2)
+    templates: [templates/database.yaml]
+    release: {name: h3, namespace: video-a}
+    kubernetesProvider: *cnpgSecret
+    asserts:
+      - equal: {path: spec.name, value: h3_video_a_h3_b6fbe84c}
+      - equal: {path: metadata.name, value: h3-video-a-h3-b6fbe84c}
+
+  - it: video-a/h3 and video/a-h3 get different databases (2 of 2)
+    templates: [templates/database.yaml]
+    release: {name: a-h3, namespace: video}
+    kubernetesProvider: *cnpgSecret
+    asserts:
+      - equal: {path: spec.name, value: h3_video_a_h3_2cecf155}
+      - equal: {path: metadata.name, value: h3-video-a-h3-2cecf155}
+
+  - it: a named database is used as it is and nothing is created
+    templates: [templates/database.yaml, templates/db-secret.yaml]
+    set:
+      database.fromSecret.database: minimaxh3
+    kubernetesProvider: *cnpgSecret
+    asserts:
+      - hasDocuments: {count: 0}
+        template: templates/database.yaml
+      - matchRegex: {path: stringData.url, pattern: "/minimaxh3$"}
+        template: templates/db-secret.yaml
+
+  - it: createDatabase false creates nothing but still names the release's database
+    templates: [templates/database.yaml, templates/db-secret.yaml]
+    set:
+      database.fromSecret.createDatabase: false
+    kubernetesProvider: *cnpgSecret
+    asserts:
+      - hasDocuments: {count: 0}
+        template: templates/database.yaml
+      - matchRegex: {path: stringData.url, pattern: "/h3_video_h3_c3b29878$"}
+        template: templates/db-secret.yaml
+
+  # ---- an upgrade keeps the database the release already runs on ----
+  - it: an upgrade from 0.2 (DSN on minimaxh3, same host) keeps minimaxh3 and creates nothing
+    templates: [templates/database.yaml, templates/db-secret.yaml]
+    kubernetesProvider: &priorShared
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: cnpg-rw, namespace: middleware}
+          data: {password: cEBzczp3L3JkIzEl}
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: h3-minimax-h3-db, namespace: video}
+          # base64 of "postgresql://h3:x@cnpg-rw.middleware.svc.cluster.local:5432/minimaxh3"
+          data: {url: cG9zdGdyZXNxbDovL2gzOnhAY25wZy1ydy5taWRkbGV3YXJlLnN2Yy5jbHVzdGVyLmxvY2FsOjU0MzIvbWluaW1heGgz}
+    asserts:
+      - hasDocuments: {count: 0}
+        template: templates/database.yaml
+      - matchRegex: {path: stringData.url, pattern: "/minimaxh3$"}
+        template: templates/db-secret.yaml
+
+  - it: a release already on its own database keeps rendering its Database
+    templates: [templates/database.yaml]
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: cnpg-rw, namespace: middleware}
+          data: {password: cEBzczp3L3JkIzEl}
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: h3-minimax-h3-db, namespace: video}
+          # base64 of "postgresql://h3:x@cnpg-rw.middleware.svc.cluster.local:5432/h3_video_h3_c3b29878"
+          data: {url: cG9zdGdyZXNxbDovL2gzOnhAY25wZy1ydy5taWRkbGV3YXJlLnN2Yy5jbHVzdGVyLmxvY2FsOjU0MzIvaDNfdmlkZW9faDNfYzNiMjk4Nzg=}
+    asserts:
+      - hasDocuments: {count: 1}
+      - equal: {path: spec.name, value: h3_video_h3_c3b29878}
+
+  - it: a DSN on another host (an earlier database.url) is not taken over
+    templates: [templates/database.yaml, templates/db-secret.yaml]
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: cnpg-rw, namespace: middleware}
+          data: {password: cEBzczp3L3JkIzEl}
+        - apiVersion: v1
+          kind: Secret
+          metadata: {name: h3-minimax-h3-db, namespace: video}
+          # base64 of "postgresql://u:p@db.example:5432/minimaxh3"
+          data: {url: cG9zdGdyZXNxbDovL3U6cEBkYi5leGFtcGxlOjU0MzIvbWluaW1heGgz}
+    asserts:
+      - hasDocuments: {count: 1}
+        template: templates/database.yaml
+      - matchRegex: {path: stringData.url, pattern: "/h3_video_h3_c3b29878$"}
+        template: templates/db-secret.yaml
+
+  - it: fromSecret.database still wins over the release's current database
+    templates: [templates/db-secret.yaml]
+    set:
+      database.fromSecret.database: other
+    kubernetesProvider: *priorShared
+    asserts:
+      - matchRegex: {path: stringData.url, pattern: "/other$"}
+
+  - it: an explicit url creates no database
+    templates: [templates/database.yaml]
+    set:
+      database.url: postgresql://u:p@db/x
+    asserts:
+      - hasDocuments: {count: 0}
+
+  # ---- an existing Secret wins over fromSecret, with database.create left on ----
+  - it: existingSecret is used as given, and nothing of fromSecret is rendered
+    templates: [templates/db-secret.yaml, templates/database.yaml, templates/server-deployment.yaml]
+    set:
+      database.existingSecret: my-dsn
+      database.existingSecretKey: dsn
+    kubernetesProvider: *cnpgSecret
+    asserts:
+      - hasDocuments: {count: 0}
+        template: templates/db-secret.yaml
+      - hasDocuments: {count: 0}
+        template: templates/database.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: H3_DATABASE_URL, valueFrom: {secretKeyRef: {name: my-dsn, key: dsn}}}
+        template: templates/server-deployment.yaml
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+
+  - it: database.url still wins over existingSecret
+    templates: [templates/db-secret.yaml]
+    set:
+      database.url: postgresql://u:p@db:5432/x
+      database.existingSecret: my-dsn
+    asserts:
+      - equal: {path: stringData.url, value: "postgresql://u:p@db:5432/x"}
+
+  # ---- the GPU product pins only a pool that runs SGLang in its Pod ----
+  # With an external backend the pool Pod schedules on server.* (server-deployment
+  # picks its scheduling by sglang.enabled), so sglang.gpuProduct never reaches it.
+  - it: an external SGLang backend leaves the pool Pods off the GPU product
+    templates: [templates/server-deployment.yaml]
+    set:
+      database.url: postgresql://unused
+      sglang.enabled: false
+      sglang.gpuProduct: [NVIDIA-H800]
+      server.externalSglangUrl: http://backend:30010
+      pools.ref2va.enabled: false
+      router.enabled: false
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - notExists: {path: spec.template.spec.affinity}
+
+  - it: a pool running SGLang in its Pod is pinned to the GPU product
+    templates: [templates/server-deployment.yaml]
+    set:
+      database.url: postgresql://unused
+      sglang.gpuProduct: [NVIDIA-H800]
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - contains:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions
+          content: {key: nvidia.com/gpu.product, operator: In, values: [NVIDIA-H800]}
+
+  # ---- the default queue query names the Service the ServiceMonitor scrapes ----
+  # service="<pool Deployment>" in __SCOPE__ holds only while the one scraped
+  # Service of a pool carries the Deployment's name.
+  - it: the scraped Service of a pool is named after its Deployment
+    templates: [templates/server-deployment.yaml]
+    set:
+      database.url: postgresql://unused
+    documentSelector: {path: "metadata.labels[\"minimax-h3/scrape\"]", value: "true", matchMany: true}
+    asserts:
+      - isKind: {of: Service}
+      - matchRegex: {path: metadata.name, pattern: "^h3-minimax-h3-server-(fl2va|ref2va)$"}
+
+  - it: the pool Deployments carry those names
+    templates: [templates/server-deployment.yaml]
+    set:
+      database.url: postgresql://unused
+    documentSelector: {path: kind, value: Deployment, matchMany: true}
+    asserts:
+      - matchRegex: {path: metadata.name, pattern: "^h3-minimax-h3-(server-(fl2va|ref2va)|router)$"}
+
+  - it: the ServiceMonitor selects only the scraped Services
+    templates: [templates/servicemonitor.yaml]
+    set:
+      database.url: postgresql://unused
+    asserts:
+      - equal: {path: "spec.selector.matchLabels[\"minimax-h3/scrape\"]", value: "true"}
+
+  - it: the default queue query is scoped to that Service
+    templates: [templates/autoscaling.yaml]
+    set:
+      database.url: postgresql://unused
+      sloRequirement.enabled: true
+    documentSelector: {path: metadata.name, value: h3-minimax-h3-server-fl2va}
+    asserts:
+      - matchRegex: {path: spec.queue.promql, pattern: 'service="h3-minimax-h3-server-fl2va"'}
+
+  # ---- base URL ----
+  - it: a trailing slash on modelRoute.url is not passed on
+    templates: [templates/server-deployment.yaml]
+    set:
+      database.url: postgresql://unused
+      serviceId: h3-test
+      modelRoute.url: https://gw.example.com/h3-test/
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: H3_PUBLIC_BASE_URL, value: https://gw.example.com/h3-test}
+
+  - it: nor on an explicit publicBaseUrl
+    templates: [templates/server-deployment.yaml]
+    set:
+      database.url: postgresql://unused
+      server.config.publicBaseUrl: https://h3.example.com/
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content: {name: H3_PUBLIC_BASE_URL, value: https://h3.example.com}
+
+  # ---- upgrade from 0.2 with --reuse-values ----
+  # helm then renders with the 0.2 chart's values, so every map 0.3 added is absent.
+  - it: renders with only 0.2-shaped values
+    set:
+      database.url: postgresql://unused
+      serviceId: null
+      model: null
+      schedulerName: null
+      priorityClassName: null
+      affinity: null
+      scaler: null
+      sloRequirement: null
+      cart: null
+      modelRoute.nginx: null
+      modelRoute.url: null
+      modelRoute.enabled: true
+      modelRoute.openrestyService: llm-route/openresty
+      modelRoute.outputConfigMap: llm-route/openresty-conf
+      database.fromSecret.host: null
+      pools.fl2va.modelSubdir: null
+      pools.fl2va.scaler: null
+      pools.fl2va.sloRequirement: null
+      pools.ref2va.modelSubdir: null
+      pools.ref2va.scaler: null
+      pools.ref2va.sloRequirement: null
+      pools.ref2va.turbo.lora.subdir: null
+      sglang.gpuResource: null
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: and keeps the pools at their replicaCount, with no scaler or SLO
+    templates: [templates/server-deployment.yaml, templates/autoscaling.yaml]
+    set:
+      database.url: postgresql://unused
+      scaler: null
+      sloRequirement: null
+      pools.fl2va.replicaCount: 2
+    asserts:
+      - hasDocuments: {count: 0}
+        template: templates/autoscaling.yaml
+      - equal: {path: spec.replicas, value: 2}
+        template: templates/server-deployment.yaml
+        documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+
+  # ---- queue depth ----
+  - it: queue depth defaults to 5 for fl2va and 2 for ref2va
+    templates: [templates/autoscaling.yaml]
+    set: &slo
+      database.url: postgresql://unused
+      sloRequirement.enabled: true
+    asserts:
+      - equal: {path: spec.queue.maxDepth, value: 5}
+        documentSelector: {path: "metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - equal: {path: spec.queue.maxDepth, value: 2}
+        documentSelector: {path: "metadata.labels[\"minimax-h3/pool\"]", value: ref2va}
+
+  - it: the shared queue depth applies to both pools; a pool's own wins
+    templates: [templates/autoscaling.yaml]
+    set:
+      database.url: postgresql://unused
+      sloRequirement.enabled: true
+      sloRequirement.queue.maxDepth: 10
+      pools.ref2va.sloRequirement.queue.maxDepth: 3
+    asserts:
+      - equal: {path: spec.queue.maxDepth, value: 10}
+        documentSelector: {path: "metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+      - equal: {path: spec.queue.maxDepth, value: 3}
+        documentSelector: {path: "metadata.labels[\"minimax-h3/pool\"]", value: ref2va}
+
+  # ---- the default queue query's limits ----
+  - it: the default queue query needs the ServiceMonitor
+    templates: [templates/autoscaling.yaml]
+    set:
+      database.url: postgresql://unused
+      sloRequirement.enabled: true
+      serviceMonitor.enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "serviceMonitor.enabled is false, so the backlog would always read 0"
+
+  - it: a promql of your own does not
+    templates: [templates/autoscaling.yaml]
+    set:
+      database.url: postgresql://unused
+      sloRequirement.enabled: true
+      serviceMonitor.enabled: false
+      sloRequirement.queue.promql: sum(my_queue) or vector(0)
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: a scaled pool cannot go down to 0 on the default queue query
+    templates: [templates/autoscaling.yaml]
+    set:
+      database.url: postgresql://unused
+      sloRequirement.enabled: true
+      pools.fl2va.sloRequirement.minReplicas: 0
+      pools.fl2va.sloRequirement.maxReplicas: 2
+    asserts:
+      - failedTemplate:
+          errorPattern: "pool fl2va: sloRequirement minReplicas 0 with the default queue query cannot scale back up"
+
+  - it: an unscaled pool at minimum 0 is allowed (nothing scales it)
+    templates: [templates/autoscaling.yaml]
+    set:
+      database.url: postgresql://unused
+      sloRequirement.enabled: true
+      pools.fl2va.sloRequirement.minReplicas: 0
+    asserts:
+      - notFailedTemplate: {}

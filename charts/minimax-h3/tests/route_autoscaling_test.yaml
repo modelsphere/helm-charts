@@ -1,0 +1,223 @@
+# Route name resolution (nginx.route > serviceId > legacy modelRoute.route), the
+# nginx.* / legacy route keys, publicBaseUrl's tail, and the per-pool LLMScaler
+# and JobSLORequirement.
+suite: route and autoscaling
+release:
+  name: h3
+  namespace: minimax-h3
+capabilities:
+  apiVersions:
+    - routing.modelsphere.dev/v1alpha1
+set:
+  database.url: postgresql://unused
+  modelRoute.enabled: true
+  modelRoute.nginx.service: llm-route/openresty
+  modelRoute.nginx.outputConfigMap: llm-route/openresty-conf
+tests:
+  - it: legacy keys still render the legacy route
+    templates: [templates/modelroute.yaml]
+    set:
+      modelRoute.nginx.service: ""
+      modelRoute.nginx.outputConfigMap: ""
+      modelRoute.openrestyService: llm-route/openresty
+      modelRoute.outputConfigMap: llm-route/openresty-conf
+    asserts:
+      - equal: {path: metadata.name, value: minimax-h3}
+      - equal: {path: spec.nginx.route, value: minimax-h3}
+      - equal: {path: spec.nginx.service, value: llm-route/openresty}
+      - equal: {path: spec.nginx.outputConfigMap, value: llm-route/openresty-conf}
+
+  - it: serviceId beats the legacy route; nginx.* beat the legacy keys
+    templates: [templates/modelroute.yaml]
+    set:
+      serviceId: h3-test
+      modelRoute.openrestyService: old/openresty
+      modelRoute.outputConfigMap: old/conf
+      modelRoute.nginx.service: llm-route/openresty
+      modelRoute.nginx.outputConfigMap: llm-route/openresty-conf
+    asserts:
+      - equal: {path: metadata.name, value: h3-test}
+      - equal: {path: spec.nginx.route, value: h3-test}
+      - equal: {path: spec.nginx.service, value: llm-route/openresty}
+      - equal: {path: spec.nginx.outputConfigMap, value: llm-route/openresty-conf}
+
+  - it: nginx.route beats serviceId; selector stands in for service
+    templates: [templates/modelroute.yaml]
+    set:
+      serviceId: h3-test
+      modelRoute.nginx.route: video-a
+      modelRoute.nginx.service: ""
+      modelRoute.nginx.selector: app=openresty
+    asserts:
+      - equal: {path: metadata.name, value: video-a}
+      - equal: {path: spec.nginx.selector, value: app=openresty}
+      - notExists: {path: spec.nginx.service}
+
+  - it: no ConfigMap fails
+    templates: [templates/modelroute.yaml]
+    set:
+      modelRoute.nginx.outputConfigMap: ""
+    asserts:
+      - failedTemplate: {errorPattern: needs modelRoute.nginx.outputConfigMap}
+
+  - it: an explicit publicBaseUrl is taken as given, route tail or not
+    templates: [templates/server-deployment.yaml]
+    set:
+      serviceId: h3-test
+      server.config.publicBaseUrl: https://h3.example.com
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_PUBLIC_BASE_URL, value: https://h3.example.com}
+
+  - it: __ROUTE__ in publicBaseUrl follows the route
+    templates: [templates/server-deployment.yaml]
+    set:
+      serviceId: h3-test
+      server.config.publicBaseUrl: https://gw.example.com/__ROUTE__
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_PUBLIC_BASE_URL, value: https://gw.example.com/h3-test}
+
+  - it: nothing autoscaling by default
+    templates: [templates/autoscaling.yaml]
+    asserts:
+      - hasDocuments: {count: 0}
+
+  - it: one LLMScaler per pool, keyed by the Deployment name
+    templates: [templates/autoscaling.yaml]
+    set:
+      scaler.enabled: true
+      pools.ref2va.scaler.maxReplicas: 8
+    asserts:
+      - hasDocuments: {count: 2}
+      - equal:
+          path: spec
+          value:
+            targetRef: {apiVersion: apps/v1, kind: Deployment, name: h3-minimax-h3-server-fl2va}
+            metricProvider: Custom
+            serverAddress: http://decision-gen.llm-scaler.svc:80
+            customProvider: {serviceId: h3-minimax-h3-server-fl2va, path: /decisions, namespace: minimax-h3}
+            minReplicas: 1
+            maxReplicas: 200
+            syncPeriodSeconds: 10
+            retryPeriodSeconds: 10
+            deferTimeoutSeconds: 600
+            scaleDown: {behavior: CacheAware, maxStepReplicas: 10, stabilizationWindowSeconds: 10}
+        documentSelector: {path: metadata.name, value: h3-minimax-h3-server-fl2va}
+      - equal: {path: apiVersion, value: autoscaling.modelsphere.dev/v1alpha1}
+        documentSelector: {path: metadata.name, value: h3-minimax-h3-server-ref2va}
+      - equal: {path: spec.maxReplicas, value: 8}
+        documentSelector: {path: metadata.name, value: h3-minimax-h3-server-ref2va}
+
+  - it: JobSLORequirement with max empty has no maximumDeployment (not scaled)
+    templates: [templates/autoscaling.yaml]
+    set:
+      sloRequirement.enabled: true
+    asserts:
+      - hasDocuments: {count: 2}
+      - isKind: {of: JobSLORequirement}
+      - notExists: {path: spec.maximumDeployment}
+      - equal:
+          path: spec
+          value:
+            serviceId: h3-minimax-h3-server-fl2va
+            priority: 10
+            minimumDeployment: {type: replica, value: 1}
+            queue:
+              maxDepth: 5
+              promql: sum(max by(status)(h3_queue_tasks{namespace="minimax-h3", service="h3-minimax-h3-server-fl2va", capability="fl2va", status=~"queued|running"})) or vector(0)
+        documentSelector: {path: metadata.name, value: h3-minimax-h3-server-fl2va}
+      - equal: {path: spec.queue.maxDepth, value: 2}
+        documentSelector: {path: metadata.name, value: h3-minimax-h3-server-ref2va}
+
+  - it: max set turns scaling on; pool keys win, min 0 included (with a query of its own)
+    templates: [templates/autoscaling.yaml]
+    set:
+      sloRequirement.enabled: true
+      sloRequirement.maxReplicas: 5
+      sloRequirement.minReplicas: 2
+      pools.ref2va.sloRequirement: {minReplicas: 0, maxReplicas: 3, priority: 20, queue: {maxDepth: 1, promql: "sum(router_queue{capability=\"ref2va\"}) or vector(0)"}}
+    asserts:
+      - equal: {path: spec.maximumDeployment, value: {type: replica, value: 5}}
+        documentSelector: {path: metadata.name, value: h3-minimax-h3-server-fl2va}
+      - equal: {path: spec.minimumDeployment, value: {type: replica, value: 2}}
+        documentSelector: {path: metadata.name, value: h3-minimax-h3-server-fl2va}
+      - equal: {path: spec.maximumDeployment, value: {type: replica, value: 3}}
+        documentSelector: {path: metadata.name, value: h3-minimax-h3-server-ref2va}
+      - equal: {path: spec.minimumDeployment, value: {type: replica, value: 0}}
+        documentSelector: {path: metadata.name, value: h3-minimax-h3-server-ref2va}
+      - equal: {path: spec.priority, value: 20}
+        documentSelector: {path: metadata.name, value: h3-minimax-h3-server-ref2va}
+      - equal: {path: spec.queue.maxDepth, value: 1}
+        documentSelector: {path: metadata.name, value: h3-minimax-h3-server-ref2va}
+
+  - it: min above max fails
+    templates: [templates/autoscaling.yaml]
+    set:
+      sloRequirement.enabled: true
+      sloRequirement.minReplicas: 6
+      sloRequirement.maxReplicas: 5
+    asserts:
+      - failedTemplate: {errorPattern: minReplicas \(6\) is above maxReplicas \(5\)}
+
+  - it: an explicit publicBaseUrl wins over modelRoute.url
+    templates: [templates/server-deployment.yaml]
+    set:
+      serviceId: h3-test
+      server.config.publicBaseUrl: https://a.example.com/h3-test
+      modelRoute.url: https://b.example.com/h3-test
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_PUBLIC_BASE_URL, value: https://a.example.com/h3-test}
+
+  - it: modelRoute.url is the base when publicBaseUrl is empty
+    templates: [templates/server-deployment.yaml]
+    set:
+      serviceId: h3-test
+      modelRoute.url: https://b.example.com/h3-test
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_PUBLIC_BASE_URL, value: https://b.example.com/h3-test}
+
+  - it: neither leaves H3_PUBLIC_BASE_URL unset
+    templates: [templates/server-deployment.yaml]
+    documentSelector: {path: "spec.template.metadata.labels[\"minimax-h3/pool\"]", value: fl2va}
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[?(@.name == "server")].env
+          content: {name: H3_PUBLIC_BASE_URL}
+          any: true
+
+  - it: a modelRoute.url that does not end in the route fails
+    templates: [templates/server-deployment.yaml]
+    set:
+      serviceId: h3-test
+      modelRoute.url: https://b.example.com/minimax-h3
+    asserts:
+      - failedTemplate: {errorPattern: must end in /h3-test}
+
+  - it: the default JobSLORequirement is exactly the off state (no maximumDeployment)
+    templates: [templates/autoscaling.yaml]
+    set:
+      sloRequirement.enabled: true
+    documentSelector: {path: metadata.name, value: h3-minimax-h3-server-ref2va}
+    asserts:
+      - isKind: {of: JobSLORequirement}
+      - equal: {path: apiVersion, value: inference.modelsphere.dev/v1alpha1}
+      - equal:
+          path: spec
+          value:
+            serviceId: h3-minimax-h3-server-ref2va
+            priority: 10
+            minimumDeployment: {type: replica, value: 1}
+            queue:
+              maxDepth: 2
+              promql: sum(max by(status)(h3_queue_tasks{namespace="minimax-h3", service="h3-minimax-h3-server-ref2va", capability="ref2va", status=~"queued|running"})) or vector(0)

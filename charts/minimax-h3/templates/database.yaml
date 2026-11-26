@@ -1,0 +1,24 @@
+{{- /*
+  This release's own database on the shared CloudNativePG cluster (see
+  database.fromSecret in values.yaml). It lives beside the cluster, in
+  fromSecret.namespace, because a Database must be in its Cluster's namespace.
+  retain: uninstalling the release deletes this object and keeps the data.
+*/}}
+{{- if include "minimax-h3.createDatabase" . }}
+{{- $f := .Values.database.fromSecret }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  {{- /* The database's own name, as a DNS label: unique for the same reason (the hash). */}}
+  name: {{ include "minimax-h3.ownDatabaseName" . | replace "_" "-" }}
+  namespace: {{ $f.namespace }}
+  labels:
+    {{- include "minimax-h3.labels" . | nindent 4 }}
+spec:
+  cluster:
+    name: {{ required "database.fromSecret.cluster is required to create the database" $f.cluster }}
+  name: {{ include "minimax-h3.databaseName" . }}
+  owner: {{ $f.user }}
+  ensure: present
+  databaseReclaimPolicy: retain
+{{- end }}

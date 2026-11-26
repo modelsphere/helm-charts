@@ -1,0 +1,155 @@
+{{- /*
+  Per-pool autoscaling: an LLMScaler (scaler.enabled) that follows a decision
+  server, and a JobSLORequirement (sloRequirement.enabled) that tells the
+  decision server how to size the pool from its queue.
+
+  Both are keyed by the pool's Deployment name (<release>-server-<pool>): the
+  decision server resolves the workload by serviceId, so serviceId must be the
+  name of what the LLMScaler targets.
+
+  Per-pool keys under pools.<pool>.scaler / pools.<pool>.sloRequirement win over
+  the shared ones key by key (hasKey, not mergeOverwrite: a pool asking for
+  minReplicas: 0 must not fall back to the shared value).
+
+  scaler and sloRequirement are read through `default dict`: an upgrade from 0.2
+  with --reuse-values carries the old chart's values, which have neither.
+*/}}
+{{- if .Values.server.enabled }}
+{{- $root := . }}
+{{- $scaler := default (dict) .Values.scaler }}
+{{- $slo := default (dict) .Values.sloRequirement }}
+{{- /* Queue depth when neither the pool nor the shared value sets one: a Ref2VA task runs longer. */}}
+{{- $defaultDepth := dict "fl2va" 5 "ref2va" 2 }}
+{{- range $poolName, $pool := .Values.pools }}
+{{- if $pool.enabled }}
+{{- $name := include "minimax-h3.pool.fullname" (dict "root" $root "pool" $poolName) }}
+{{- if $scaler.enabled }}
+{{- $s := $scaler }}
+{{- $ps := default (dict) $pool.scaler }}
+{{- $min := ternary $ps.minReplicas $s.minReplicas (hasKey $ps "minReplicas") }}
+{{- $max := ternary $ps.maxReplicas $s.maxReplicas (hasKey $ps "maxReplicas") }}
+{{- if not $s.serverAddress }}
+{{- fail "scaler.serverAddress is required: the decision server's base URL, e.g. http://decision-gen.llm-scaler.svc:80" }}
+{{- end }}
+{{- if gt (int $min) (int $max) }}
+{{- fail (printf "pool %s: scaler minReplicas (%d) is above maxReplicas (%d)" $poolName (int $min) (int $max)) }}
+{{- end }}
+{{- $cp := default (dict) $s.customProvider }}
+{{- $sd := default (dict) $s.scaleDown }}
+---
+apiVersion: autoscaling.modelsphere.dev/v1alpha1
+kind: LLMScaler
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "minimax-h3.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: server
+    minimax-h3/pool: {{ $poolName }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $name }}
+  # Custom: the replica count is read off the decision server at serverAddress,
+  # which sizes the pool from its JobSLORequirement.
+  metricProvider: Custom
+  serverAddress: {{ $s.serverAddress | quote }}
+  {{- with $s.serverHeaders }}
+  serverHeaders:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  customProvider:
+    serviceId: {{ $name | quote }}
+    path: {{ $cp.path | default "/decisions" | quote }}
+    namespace: {{ $cp.namespace | default $root.Release.Namespace | quote }}
+  minReplicas: {{ int $min }}
+  maxReplicas: {{ int $max }}
+  syncPeriodSeconds: {{ $s.syncPeriodSeconds | default 10 }}
+  retryPeriodSeconds: {{ $s.retryPeriodSeconds | default 10 }}
+  deferTimeoutSeconds: {{ $s.deferTimeoutSeconds | default 600 }}
+  {{- if or $sd.behavior $sd.maxStepReplicas $sd.stabilizationWindowSeconds }}
+  scaleDown:
+    {{- with $sd.behavior }}
+    behavior: {{ . }}
+    {{- end }}
+    {{- with $sd.maxStepReplicas }}
+    maxStepReplicas: {{ . }}
+    {{- end }}
+    {{- with $sd.stabilizationWindowSeconds }}
+    stabilizationWindowSeconds: {{ . }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- if $slo.enabled }}
+{{- $g := $slo }}
+{{- $p := default (dict) $pool.sloRequirement }}
+{{- $gq := default (dict) $g.queue }}
+{{- $pq := default (dict) $p.queue }}
+{{- $min := ternary $p.minReplicas $g.minReplicas (hasKey $p "minReplicas") }}
+{{- $max := ternary $p.maxReplicas $g.maxReplicas (hasKey $p "maxReplicas") }}
+{{- $priority := ternary $p.priority $g.priority (hasKey $p "priority") }}
+{{- $depth := ternary $pq.maxDepth $gq.maxDepth (hasKey $pq "maxDepth") }}
+{{- if kindIs "invalid" $depth }}{{- $depth = get $defaultDepth $poolName | default 5 }}{{- end }}
+{{- $promql := ternary $pq.promql $gq.promql (hasKey $pq "promql") }}
+{{- $scope := printf "namespace=\"%s\", service=\"%s\", capability=\"%s\"" $root.Release.Namespace $name $poolName }}
+{{- /* An empty max is the off state: no maximumDeployment = unmanaged for the decision server. */}}
+{{- $managed := not (or (kindIs "invalid" $max) (eq (toString $max) "")) }}
+{{- if $managed }}
+{{- if gt (int $min) (int $max) }}
+{{- fail (printf "pool %s: sloRequirement minReplicas (%d) is above maxReplicas (%d)" $poolName (int $min) (int $max)) }}
+{{- end }}
+{{- end }}
+{{- if not $promql }}
+{{- fail (printf "pool %s: sloRequirement.queue.promql is empty" $poolName) }}
+{{- end }}
+{{- /*
+  A __SCOPE__d query reads the series this chart's ServiceMonitor scrapes off
+  the pool's own Pods, which export only their own capability's backlog. So
+  without the ServiceMonitor it always reads 0, and at 0 replicas there is no
+  Pod left to report a backlog that would scale the pool back up. Write your own
+  promql to lift either restriction.
+*/}}
+{{- if contains "__SCOPE__" $promql }}
+{{- if not (default (dict) $root.Values.serviceMonitor).enabled }}
+{{- fail (printf "pool %s: sloRequirement.queue.promql reads the queue this chart's ServiceMonitor scrapes, and serviceMonitor.enabled is false, so the backlog would always read 0. Enable the ServiceMonitor, or give a promql of your own" $poolName) }}
+{{- end }}
+{{- if and $managed (eq (int $min) 0) }}
+{{- fail (printf "pool %s: sloRequirement minReplicas 0 with the default queue query cannot scale back up: the backlog is read off the pool's own Pods, so at 0 replicas it reads 0. Keep minReplicas at 1 or more, or give a promql that reads the backlog elsewhere" $poolName) }}
+{{- end }}
+{{- end }}
+---
+apiVersion: inference.modelsphere.dev/v1alpha1
+kind: JobSLORequirement
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "minimax-h3.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: server
+    minimax-h3/pool: {{ $poolName }}
+  {{- with $g.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  serviceId: {{ $name | quote }}
+  priority: {{ int $priority }}
+  minimumDeployment:
+    type: replica
+    value: {{ int $min }}
+  {{- if $managed }}
+  maximumDeployment:
+    type: replica
+    value: {{ int $max }}
+  {{- else }}
+  # No maximumDeployment: the decision server leaves this pool unmanaged (not
+  # scaled). Set sloRequirement.maxReplicas (or the pool's) to scale it.
+  {{- end }}
+  queue:
+    maxDepth: {{ int $depth }}
+    promql: {{ $promql | replace "__SCOPE__" $scope | quote }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
