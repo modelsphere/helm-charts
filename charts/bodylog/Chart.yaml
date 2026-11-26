@@ -9,13 +9,13 @@ type: application
 # The chart version tracks appVersion for this chart, so the chart and the image
 # it ships share one number. Not a rule for every chart here: cart carries a
 # chart version of its own, independent of the app it ships.
-version: 0.1.16
+version: 0.1.18
 # The listener image tag: values.image.tag is empty by default and falls back to
 # this, so a release moves both together.
 #
-# 0.1.15 is the first release published for linux/arm64 as well as amd64
-# (4pdosc/bodylog-listener:0.1.15, a bodylog/v0.1.15 tag upstream). The chart is
-# 0.1.16, one ahead of it, because chart 0.1.15 was already published with the
-# 0.1.14 image and a published chart version cannot be reused.
-appVersion: "0.1.15"
+# 0.1.18 records the model the request asked for as req_model, including on
+# requests the router rejects itself (429/400), whose response carries no model.
+# Chart and image are back on one number here: chart 0.1.17 was never published,
+# so the chart skips straight to the image's 0.1.18.
+appVersion: "0.1.18"
 keywords: [bodylog, openresty, observability]
