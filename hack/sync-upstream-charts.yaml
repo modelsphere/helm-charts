@@ -1,0 +1,129 @@
+# Vendored charts, copied from an upstream repo's latest stable GitHub Release
+# by hack/sync-upstream-charts.py. To follow another chart, add an entry.
+#
+#   name      Chart name. --only selects on this.
+#   repo      GitHub "owner/name" the chart is developed in.
+#   path      Directory of the chart inside that repo, at the release tag.
+#   dest      Directory in this repo the chart is copied to.
+#   images    Repository rewrites applied to every text file except README*.md
+#             (those document the OCI chart and are copied as-is). `from` matches
+#             only a whole image repository: the next character must be the end
+#             of the text, ":", "@", whitespace or a quote, so a longer name is
+#             left alone. An oci:// chart reference is never rewritten. `to` is
+#             the Docker Hub mirror this repository publishes; crane is asked
+#             for each rendered image whose repository is one of these.
+#   patches   Substitutions applied after the copy and before the image rewrite.
+#             `find` / `replace` are literal text unless `regex: true` (a Python
+#             regular expression, MULTILINE). If `find` does not match and
+#             `replace` is not already in the file, upstream changed the text
+#             the patch was written against: the chart is put back and reported
+#             as needing a human, because applying half a rewrite would publish
+#             a chart this repo did not mean to publish.
+#   keep      Paths under dest that stay as they are in this repo. A kept
+#             Chart.yaml still takes upstream's top-level version and appVersion
+#             (a text edit, so comments and quoting survive). If its dependencies
+#             differ from upstream's, a human has to reconcile them.
+#   exclude   Paths under the upstream chart that are not copied.
+#   ci_args   Extra arguments for this chart's `helm lint` / `helm template`.
+#             They must stay in step with hack/check-chart-images.sh and the
+#             "Write per-chart CI values" step in .github/workflows/ci.yml. A
+#             guard the chart refuses to render without would otherwise make
+#             the sync's own lint a false pass or a false failure.
+charts:
+  - name: swiss
+    repo: modelsphere/swiss
+    path: helm/swiss
+    dest: charts/swiss
+    images:
+      # catalog-server is a different repository and is intentionally not
+      # listed, so ghcr.io/modelsphere/catalog-server stays on GHCR.
+      - from: ghcr.io/modelsphere/swissd
+        to: 4pdosc/swissd
+    patches:
+      # The OCI chart defaults to GHCR. This copy is published through the
+      # modelsphere helm-charts repository, so the default is the Docker Hub
+      # mirror, with the comment that says so.
+      - file: values.yaml
+        find: |
+          image:
+            repository: ghcr.io/modelsphere/swissd
+        replace: |
+          image:
+            # This copy of the chart is published through the modelsphere helm-charts
+            # repository, so it defaults to the Docker Hub mirror (the OCI chart uses
+            # ghcr.io/modelsphere/swissd).
+            repository: 4pdosc/swissd
+    # Same --set as hack/check-chart-images.sh and ci.yml.
+    ci_args: "--set rbac.namespaces[0]=ci"
+
+  - name: console
+    repo: modelsphere/console
+    path: helm/console
+    dest: charts/console
+    images:
+      - from: ghcr.io/modelsphere/console
+        to: 4pdosc/console
+    patches:
+      - file: values.yaml
+        find: |
+          image:
+            # The OCI chart (oci://ghcr.io/modelsphere/charts/console) uses this GHCR image. The
+            # copy in the modelsphere helm-charts repo uses 4pdosc/console on Docker Hub instead.
+            repository: ghcr.io/modelsphere/console
+        replace: |
+          image:
+            # This copy of the chart is published through the modelsphere helm-charts
+            # repository, so it defaults to the Docker Hub mirror. The OCI chart
+            # (oci://ghcr.io/modelsphere/charts/console) uses ghcr.io/modelsphere/console.
+            repository: 4pdosc/console
+    # Upstream ships no .helmignore; this repo has one and it is not part of
+    # the upstream chart. Chart.lock is a `helm dependency` product (and
+    # gitignored); copying it would pin a resolution this repo does not store.
+    # dependencies stay on oci://ghcr.io/modelsphere/charts — that is a chart
+    # repository, not the console image, and README*.md is copied unchanged.
+    keep:
+      - .helmignore
+    exclude:
+      - Chart.lock
+    # ci.yml passes no extra --set for console.
+    ci_args: ""
+
+  - name: llmscaleoperator
+    repo: modelsphere/llm-operator
+    path: dist/chart
+    dest: charts/llmscaleoperator
+    images:
+      # Upstream already publishes 4pdosc/llm-operator. Keep the rewrite so a
+      # later release that points the chart at ghcr.io/modelsphere/llm-operator
+      # still lands on the Docker Hub mirror.
+      - from: ghcr.io/modelsphere/llm-operator
+        to: 4pdosc/llm-operator
+    patches:
+      # Upstream pins manager.image.tag to the chart version. A pinned tag
+      # outranks Chart.appVersion, so this copy leaves the tag empty on
+      # purpose. The quoted version changes every release, so the match is a
+      # regex. |2 on replace keeps the two leading spaces: the block is
+      # indented under `manager:` and a plain `|` would strip them.
+      - file: values.yaml
+        regex: true
+        find: |
+          ^  image:
+              repository: (?:4pdosc/llm-operator|ghcr\.io/modelsphere/llm-operator)
+              ## Image tag \(defaults to Chart\.appVersion if not set\)
+              ##
+              tag: "[^"]+"
+        replace: |2
+            image:
+              ## Public image on Docker Hub, like the other charts here.
+              repository: 4pdosc/llm-operator
+              ## Image tag. Left empty on purpose so it follows Chart.appVersion --
+              ## a pinned tag here silently outranks appVersion and ships an older image
+              ## than the chart claims to install.
+              ##
+              tag: ""
+    # The description, keywords and comments in Chart.yaml are written for this
+    # repository. Only version and appVersion follow upstream.
+    keep:
+      - Chart.yaml
+    # ci.yml passes no extra --set for llmscaleoperator.
+    ci_args: ""
