@@ -27,7 +27,9 @@ autoconfig's list on every upgrade. The chart therefore renders the same thing o
 and offline (`helm template`, Argo CD).
 
 key-auth refuses a config without the list and fails closed, so autoconfig adds an
-empty list when it is missing. **This needs autoconfig 0.4.4 or later, installed
+empty list when it is missing (the chart labels key-auth
+`routing.modelsphere.dev/consumers: autoconfig`, which is what tells autoconfig the
+field is its to write, in whatever namespace the chart is installed). **This needs autoconfig 0.4.4 or later, installed
 first**: an earlier release never adds the list, and the gateway stays closed. Install
 in the order higress-core, autoconfig, this chart: with the WasmPlugin CRD in place
 when autoconfig starts, it adds the list once key-auth appears: measured about 5 s for

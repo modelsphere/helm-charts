@@ -48,6 +48,10 @@ kind: WasmPlugin
 metadata:
   name: key-auth
   namespace: {{ .Release.Namespace }}
+  labels:
+    # Hands defaultConfig.consumers of this object to autoconfig, in any
+    # namespace and before any APIConsumer or ModelFleet names this gateway.
+    routing.modelsphere.dev/consumers: autoconfig
 spec:
   url: {{ $v.plugins.keyAuth }}
   phase: AUTHN
