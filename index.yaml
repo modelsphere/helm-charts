@@ -103,6 +103,25 @@ entries:
     version: 0.3.47
   bodylog:
   - apiVersion: v2
+    appVersion: 0.1.18
+    created: "2026-11-26T05:58:57.726028891Z"
+    description: 'Body-log listener for the OpenResty router: receives full request/response
+      frames over TCP, writes them as hourly JSONL, and serves rollups over HTTP'
+    digest: 55f42d8d75e84d60ac9842bce96d789fabaa039f4ae1f138ca51daa6fb2c73b2
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - openresty
+    - observability
+    name: bodylog
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/bodylog-0.1.18/bodylog-0.1.18.tgz
+    version: 0.1.18
+  - apiVersion: v2
     appVersion: 0.1.15
     created: "2026-10-28T08:18:53.345463193Z"
     description: 'Body-log listener for the OpenResty router: receives full request/response
@@ -179,6 +198,26 @@ entries:
     - https://github.com/modelsphere/helm-charts/releases/download/bodylog-0.1.13/bodylog-0.1.13.tgz
     version: 0.1.13
   bodylog-exporter:
+  - apiVersion: v2
+    appVersion: 0.2.15
+    created: "2026-11-26T05:58:57.87456323Z"
+    description: Turns the body-log listener's detail records into Prometheus metrics,
+      and polls the router's control-plane endpoints for live routing state
+    digest: 420585db42c4cf03acc56032f0c530e5fd2b16d8f07d7a1a80e8041cbb361dea
+    home: https://github.com/modelsphere/helm-charts
+    keywords:
+    - bodylog
+    - exporter
+    - prometheus
+    - observability
+    name: bodylog-exporter
+    sources:
+    - https://github.com/modelsphere/helm-charts
+    - https://github.com/modelsphere/llm-openresty
+    type: application
+    urls:
+    - https://github.com/modelsphere/helm-charts/releases/download/bodylog-exporter-0.3.8/bodylog-exporter-0.3.8.tgz
+    version: 0.3.8
   - apiVersion: v2
     appVersion: 0.2.14
     created: "2026-11-16T05:11:06.036619926Z"
@@ -3637,4 +3676,4 @@ entries:
     urls:
     - https://github.com/modelsphere/helm-charts/releases/download/vllm-0.4.0/vllm-0.4.0.tgz
     version: 0.4.0
-generated: "2026-11-26T02:21:12.866177123Z"
+generated: "2026-11-26T05:58:57.874866245Z"
