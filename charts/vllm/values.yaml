@@ -339,9 +339,13 @@ pd:
     affinityReplace: null
     tolerationsReplace: null
     preStop:
-      # Keep the router serving while upstream endpoints (EndpointSlice and
-      # CART/OpenResty ConfigMap volume sync) converge after draining flips
-      # readinessProbe False. Set 0 to skip the sleep (still writes draining).
+      # Keep the router serving after draining flips readinessProbe False until
+      # upstream routing converges. Default 120s is a conservative workaround
+      # for modelsphere/modelsphere#92: EndpointSlice removal must be observed
+      # by autoconfig, written to the ConfigMap, projected onto disk by kubelet,
+      # and reloaded into CART/OpenResty pods via SIGHUP (~60-90s+ lag). Once
+      # modelsphere/modelsphere#92 is solved, this default can safely be lowered
+      # back down (e.g. 5-20s). Set 0 to skip the sleep (still writes draining).
       endpointSyncSeconds: 120
     # Readiness. In both pd shapes the router container carries an exec
     # startupProbe (1080x5s = 90 minutes, matching the engines' load
