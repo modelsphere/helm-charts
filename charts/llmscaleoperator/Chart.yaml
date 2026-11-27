@@ -20,8 +20,8 @@ keywords:
   - vllm
   - sglang
 
-version: 0.5.0
+version: 0.5.1
 # appVersion names an image that EXISTS in the registry, which is not always the
 # newest version the llm-operator repo has declared: publishing a chart that
 # points at an unbuilt image hands out something that cannot be installed.
-appVersion: "0.5.0"
+appVersion: "0.5.1"
