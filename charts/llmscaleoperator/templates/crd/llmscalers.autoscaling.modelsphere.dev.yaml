@@ -34,6 +34,20 @@ spec:
       jsonPath: .status.desiredReplicas
       name: DesiredReplicas
       type: integer
+    - description: Whether a usable scaling signal was received
+      jsonPath: .status.conditions[?(@.type=="ScalingActive")].status
+      name: Active
+      type: string
+    - description: Whether this sync could scale the target
+      jsonPath: .status.conditions[?(@.type=="AbleToScale")].status
+      name: AbleToScale
+      type: string
+    - description: 'The AbleToScale reason: Synced, a guard hold (RolloutInProgress,
+        ScaleDownSettling), DeferralTimedOut, ScaleDownStabilized while the stabilization
+        window keeps the count, or a failure'
+      jsonPath: .status.conditions[?(@.type=="AbleToScale")].reason
+      name: Scaling
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -87,6 +101,21 @@ spec:
                 required:
                 - serviceId
                 type: object
+              deferTimeoutSeconds:
+                default: 600
+                description: |-
+                  deferTimeoutSeconds bounds how long the rollout or settle guard may hold
+                  a scale action back. Once it has been deferred this long, measured from
+                  status.deferredSince, the held write is applied anyway (still capped by
+                  scaleDown.maxStepReplicas) and a DeferralTimedOut warning event is
+                  emitted. That write does not restart the clock: while a guard still
+                  matches, later steps proceed at the sync pace instead of waiting out
+                  the timeout again. The clock is cleared only when a sync finds no guard
+                  matching. 0 never forces, so the guards may then defer indefinitely.
+                  Defaults to 600.
+                format: int32
+                minimum: 0
+                type: integer
               maxReplicas:
                 description: |-
                   maxReplicas is the upper limit for the number of replicas to which the
@@ -134,7 +163,7 @@ spec:
                         aggregate away every label the source varies on (backend, model, route,
                         pod). A query that errors, returns no data, or returns NaN/Inf is skipped
                         for that sync rather than read as zero; if every metric is skipped the
-                        replica count is held where it is.
+                        replica count is held at spec.replicas, apart from the min/max bounds.
                       type: string
                     target:
                       description: |-
@@ -287,9 +316,18 @@ spec:
           status:
             description: status defines the observed state of LLMScaler
             properties:
+              appliedReplicas:
+                description: |-
+                  appliedReplicas is the target's spec.replicas after this sync: the value
+                  just written, or the unchanged value when the sync deferred or had nothing
+                  to do.
+                format: int32
+                type: integer
               conditions:
-                description: conditions represent the current state of the LLMScaler
-                  resource.
+                description: |-
+                  conditions represent the current state of the LLMScaler resource:
+                  AbleToScale, ScalingActive, and ScalingLimited. DecisionAvailable is
+                  deprecated and mirrors ScalingActive.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -353,10 +391,35 @@ spec:
                   pods managed by this autoscaler
                 format: int32
                 type: integer
+              deferredSince:
+                description: |-
+                  deferredSince is when the current deferral started. It is set on the first
+                  sync that holds a scale action back. It is kept across guard reason
+                  changes, across no-op syncs while a guard still matches, and across
+                  forced writes. It is cleared only when a sync finds no guard matching:
+                  a normal write, or a no-op with no guard. A no-op does not start it.
+                  It lives in status so it survives operator restarts.
+                format: date-time
+                type: string
               desiredReplicas:
                 description: desiredReplicas is the desired number of replicas of
                   pods managed by this autoscaler
                 format: int32
+                type: integer
+              lastScaleTime:
+                description: |-
+                  lastScaleTime is when the controller last successfully wrote
+                  spec.replicas on the target, taken from the reconciler clock. It is set
+                  on a normal write and on a write forced after the deferral timeout, and
+                  left unchanged on every other sync: a no-op, a deferral, pacing, or an
+                  error.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: |-
+                  observedGeneration is the most recent generation observed by the
+                  controller. It is set to metadata.generation on every status write.
+                format: int64
                 type: integer
             type: object
         required:
