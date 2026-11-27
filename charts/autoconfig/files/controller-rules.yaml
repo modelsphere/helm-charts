@@ -34,6 +34,12 @@
   - list
   - watch
 - apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
   - coordination.k8s.io
   resources:
   - leases
@@ -54,6 +60,16 @@
   - list
   - watch
 - apiGroups:
+  - extensions.higress.io
+  resources:
+  - wasmplugins
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - inference.modelsphere.dev
   resources:
   - llmslorequirements
@@ -62,9 +78,9 @@
   - list
   - watch
 - apiGroups:
-  - routing.modelsphere.dev
+  - networking.k8s.io
   resources:
-  - modelroutes
+  - ingresses
   verbs:
   - create
   - delete
@@ -76,14 +92,41 @@
 - apiGroups:
   - routing.modelsphere.dev
   resources:
+  - apiconsumers
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - routing.modelsphere.dev
+  resources:
+  - apiconsumers/finalizers
+  - modelfleets/finalizers
   - modelroutes/finalizers
   verbs:
   - update
 - apiGroups:
   - routing.modelsphere.dev
   resources:
+  - apiconsumers/status
+  - modelfleets/status
   - modelroutes/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - routing.modelsphere.dev
+  resources:
+  - modelfleets
+  - modelroutes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
